@@ -10,6 +10,12 @@ export const ClientTemplateSchema = z.object({
   displayName: z.string().min(1),
   command: z.string().min(1),
   args: z.array(z.string()).default([]),
+  /**
+   * Optional override of `args` used when resuming an existing run.
+   * Same {{session_id}} substitution applies. If empty, resume falls back
+   * to `args` (which is fine for clients without a session concept).
+   */
+  resumeArgs: z.array(z.string()).default([]),
   env: z.record(z.string()).default({}),
   cwd: z.string().default('${workspace}/agents/${name}'),
   initialPrompt: z.string().default(''),
@@ -27,13 +33,20 @@ export type ClientTemplate = z.infer<typeof ClientTemplateSchema>
 export const AgentProfileSchema = ClientTemplateSchema
 export type AgentProfile = ClientTemplate
 
+/**
+ * One named participant in a swarm. The name becomes the agent's identifier
+ * everywhere (workspace dirs, inbox/outbox paths, peer addressing). The role
+ * is appended to the protocol prompt so each agent gets its own brief.
+ */
+export const SwarmAgentSchema = z.object({
+  name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'name must be alphanumeric/dash/underscore'),
+  role: z.string().default('')
+})
+export type SwarmAgent = z.infer<typeof SwarmAgentSchema>
+
 export const SwarmConfigSchema = z.object({
   /** name of a ClientTemplate stored in ~/.ccswarm/agents/<name>.json */
   clientTemplate: z.string().default('claude-code'),
-  /** how many instances to launch */
-  instanceCount: z.number().int().min(1).max(64).default(4),
-  /** prefix for generated agent names (suffix is 1..N) */
-  namePrefix: z.string().regex(/^[a-zA-Z0-9_-]+$/).default('agent'),
   /**
    * How agents are arranged in iTerm2.
    * - grid:    one window split into N panes (default).
@@ -42,12 +55,13 @@ export const SwarmConfigSchema = z.object({
    */
   windowMode: z.enum(['grid', 'windows', 'tabs']).default('grid'),
   /**
-   * Optional per-instance roles. roles[i] is appended to the protocol message
-   * sent to instance i+1. If shorter than instanceCount, extra instances
-   * receive only the template's initialPrompt. Empty entries also fall through
-   * to the template prompt.
+   * The agents to launch. Each entry has its own name and role prompt.
+   * Names must be unique within a swarm (enforced at save time in the UI).
    */
-  roles: z.array(z.string()).default([])
+  agents: z
+    .array(SwarmAgentSchema)
+    .min(1, 'swarm must have at least one agent')
+    .default([{ name: 'agent-1', role: '' }])
 })
 export type SwarmConfig = z.infer<typeof SwarmConfigSchema>
 
@@ -58,11 +72,16 @@ export const SettingsSchema = z.object({
   protocolTemplate: z.string(),
   swarm: SwarmConfigSchema.default({
     clientTemplate: 'claude-code',
-    instanceCount: 4,
-    namePrefix: 'agent',
     windowMode: 'grid',
-    roles: []
+    agents: [{ name: 'agent-1', role: '' }]
   }),
+  telegram: z
+    .object({
+      enabled: z.boolean().default(false),
+      botToken: z.string().default(''),
+      chatId: z.string().default('')
+    })
+    .default({ enabled: false, botToken: '', chatId: '' }),
   general: z
     .object({
       autoStart: z.boolean().default(false),
@@ -73,10 +92,70 @@ export const SettingsSchema = z.object({
 export type Settings = z.infer<typeof SettingsSchema>
 
 export interface RunSummary {
+  taskId: string
+  displayName: string
+  projectDir: string
   runId: string
   startedAt: string
   workspaceDir: string
   windowId: string | null
   windowIds: string[]
-  agents: Array<{ name: string; sessionId: string }>
+  agents: Array<{ name: string; sessionId: string; claudeSessionId: string | null }>
 }
+
+/**
+ * What the renderer sends when the user hits "New task" on the dashboard.
+ * `templateName` references a saved SwarmTemplate; if null we fall back to
+ * settings.swarm so the bare-Settings flow keeps working.
+ */
+export const LaunchTaskRequestSchema = z.object({
+  templateName: z.string().min(1).nullable(),
+  projectDir: z.string().min(1),
+  displayName: z.string().min(1).max(120)
+})
+export type LaunchTaskRequest = z.infer<typeof LaunchTaskRequestSchema>
+
+/**
+ * A SwarmTemplate is a ready-made bundle that describes a whole swarm:
+ * which client config to launch and the named participants (each with their
+ * own role prompt). Applying a template overwrites `settings.swarm` so the
+ * user can one-click switch between curated team setups.
+ */
+export const SwarmTemplateSchema = z.object({
+  name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'name must be alphanumeric/dash/underscore'),
+  displayName: z.string().min(1),
+  description: z.string().default(''),
+  clientTemplate: z.string().min(1),
+  windowMode: z.enum(['grid', 'windows', 'tabs']).default('grid'),
+  agents: z.array(SwarmAgentSchema).min(1)
+})
+export type SwarmTemplate = z.infer<typeof SwarmTemplateSchema>
+
+/**
+ * One agent inside a persisted run record. `claudeSessionId` is the uuid we
+ * pass to Claude Code via `--session-id` so the chat can be resumed later
+ * (and so we know which file in `~/.claude/projects/<encoded>/` is the agent's
+ * conversation log).
+ */
+export const RunAgentRecordSchema = z.object({
+  name: z.string(),
+  role: z.string().default(''),
+  claudeSessionId: z.string().nullable().default(null),
+  iterm2SessionId: z.string().nullable().default(null)
+})
+export type RunAgentRecord = z.infer<typeof RunAgentRecordSchema>
+
+export const RunRecordSchema = z.object({
+  taskId: z.string(),
+  displayName: z.string(),
+  projectDir: z.string(),
+  workspaceDir: z.string(),
+  clientTemplate: z.string(),
+  windowMode: z.enum(['grid', 'windows', 'tabs']),
+  windowIds: z.array(z.string()).default([]),
+  agents: z.array(RunAgentRecordSchema),
+  status: z.enum(['running', 'stopped']).default('running'),
+  startedAt: z.string(),
+  stoppedAt: z.string().nullable().default(null)
+})
+export type RunRecord = z.infer<typeof RunRecordSchema>

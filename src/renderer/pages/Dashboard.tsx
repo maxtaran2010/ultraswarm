@@ -1,31 +1,69 @@
 import React, { useEffect, useState } from 'react'
-import { api, ClientTemplate, RunSummary, Settings } from '../api'
+import { api, RunRecord, RunSummary, Settings, SwarmTemplate } from '../api'
 
 export function Dashboard(): JSX.Element {
   const [settings, setSettings] = useState<Settings | null>(null)
-  const [template, setTemplate] = useState<ClientTemplate | null>(null)
-  const [run, setRun] = useState<RunSummary | null>(null)
+  const [templates, setTemplates] = useState<SwarmTemplate[]>([])
+  const [tasks, setTasks] = useState<RunSummary[]>([])
+  const [history, setHistory] = useState<RunRecord[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // New-task form state
+  const [templateName, setTemplateName] = useState<string>('') // '' = use Settings → Swarm
+  const [projectDir, setProjectDir] = useState<string>('')
+  const [displayName, setDisplayName] = useState<string>('')
+
   async function refresh(): Promise<void> {
-    const s = await api().settings.load()
+    const [s, list, running, runs] = await Promise.all([
+      api().settings.load(),
+      api().templates.list(),
+      api().tasks.list(),
+      api().runs.list()
+    ])
     setSettings(s)
-    const t = await api().profiles.get(s.swarm.clientTemplate)
-    setTemplate(t)
-    setRun(await api().swarm.status())
+    setTemplates(list)
+    setTasks(running)
+    setHistory(runs)
   }
 
   useEffect(() => {
     refresh().catch((e) => setError(String(e)))
+    const id = window.setInterval(() => {
+      Promise.all([api().tasks.list(), api().runs.list()])
+        .then(([t, r]) => {
+          setTasks(t)
+          setHistory(r)
+        })
+        .catch(() => {})
+    }, 3000)
+    return () => window.clearInterval(id)
   }, [])
 
+  async function pickDir(): Promise<void> {
+    const picked = await api().dialog.pickDirectory(projectDir || undefined)
+    if (picked) setProjectDir(picked)
+  }
+
   async function launch(): Promise<void> {
+    if (!projectDir.trim()) {
+      setError('Pick a working directory first.')
+      return
+    }
+    if (!displayName.trim()) {
+      setError('Give the task a name.')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
-      const summary = await api().swarm.launch()
-      setRun(summary)
+      await api().tasks.launch({
+        templateName: templateName || null,
+        projectDir: projectDir.trim(),
+        displayName: displayName.trim()
+      })
+      setDisplayName('')
+      await refresh()
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e))
     } finally {
@@ -33,12 +71,12 @@ export function Dashboard(): JSX.Element {
     }
   }
 
-  async function stop(): Promise<void> {
+  async function stop(taskId: string): Promise<void> {
     setBusy(true)
     setError(null)
     try {
-      await api().swarm.stop()
-      setRun(null)
+      await api().tasks.stop(taskId)
+      await refresh()
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e))
     } finally {
@@ -48,16 +86,18 @@ export function Dashboard(): JSX.Element {
 
   if (!settings) return <div className="muted">Loading…</div>
 
-  const swarm = settings.swarm
-  const templateMissing = !template
+  const selectedTemplate = templateName ? templates.find((t) => t.name === templateName) : null
+  const settingsAgents = settings.swarm.agents
+  const previewAgents = selectedTemplate ? selectedTemplate.agents : settingsAgents
+  const previewClient = selectedTemplate ? selectedTemplate.clientTemplate : settings.swarm.clientTemplate
 
   return (
     <div>
       <div className="row">
-        <h2>Dashboard</h2>
+        <h2>Tasks</h2>
         <span className="spacer" />
-        <span className={`status-pill ${run ? 'run' : 'idle'}`}>
-          {run ? `running · ${run.runId}` : 'idle'}
+        <span className={`status-pill ${tasks.length ? 'run' : 'idle'}`}>
+          {tasks.length ? `${tasks.length} running` : 'idle'}
         </span>
       </div>
 
@@ -68,81 +108,221 @@ export function Dashboard(): JSX.Element {
       )}
 
       <div className="card col">
+        <div className="label">New task</div>
+
         <div className="row gap">
-          <div>
-            <div className="label">Client</div>
-            <div style={{ fontSize: 16 }}>
-              {template ? template.displayName : <span className="error">{swarm.clientTemplate} (not found)</span>}
-            </div>
-            {template && <div className="muted">command: <span className="tag">{template.command}</span></div>}
+          <div style={{ flex: 1 }}>
+            <span className="label">Template</span>
+            <select value={templateName} onChange={(e) => setTemplateName(e.target.value)}>
+              <option value="">(use Settings → Swarm)</option>
+              {templates.map((t) => (
+                <option key={t.name} value={t.name}>
+                  {t.displayName} — {t.agents.length}× {t.clientTemplate}
+                </option>
+              ))}
+            </select>
           </div>
-          <span className="spacer" />
-          <div>
-            <div className="label">Instances</div>
-            <div style={{ fontSize: 16 }}>{swarm.instanceCount}</div>
-          </div>
-          <div>
-            <div className="label">Name prefix</div>
-            <div style={{ fontSize: 16 }}>
-              <span className="tag">{swarm.namePrefix}-1</span> … <span className="tag">{swarm.namePrefix}-{swarm.instanceCount}</span>
-            </div>
+          <div style={{ flex: 1 }}>
+            <span className="label">Task name</span>
+            <input
+              type="text"
+              placeholder="e.g. add-pagination, fix-login-bug"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+            />
           </div>
         </div>
 
-        <div className="row" style={{ marginTop: 8 }}>
-          {!run ? (
-            <button
-              className="primary"
-              onClick={launch}
-              disabled={busy || templateMissing}
-            >
-              {busy ? 'Launching…' : `Launch swarm (${swarm.instanceCount})`}
+        <div>
+          <span className="label">Working directory (shared cwd for all agents)</span>
+          <div className="row gap">
+            <input
+              type="text"
+              style={{ flex: 1 }}
+              placeholder="/path/to/repo"
+              value={projectDir}
+              onChange={(e) => setProjectDir(e.target.value)}
+            />
+            <button onClick={pickDir} disabled={busy}>
+              Browse…
             </button>
-          ) : (
-            <button className="danger" onClick={stop} disabled={busy}>
-              {busy ? 'Stopping…' : 'Stop swarm'}
-            </button>
-          )}
-          <span className="muted" style={{ fontSize: 12 }}>
-            Change client / count / roles in <strong>Settings → Swarm</strong>.
-          </span>
+          </div>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            Every agent in this task launches with this folder as its cwd, so they see and
+            edit the same code.
+          </div>
+        </div>
+
+        <div className="muted" style={{ fontSize: 12 }}>
+          Will launch <strong>{previewAgents.length}</strong>× <span className="tag">{previewClient}</span>:{' '}
+          {previewAgents.map((a) => (
+            <span key={a.name} className="tag" style={{ marginRight: 4 }}>
+              {a.name}
+            </span>
+          ))}
+        </div>
+
+        <div className="row">
+          <button
+            className="primary"
+            onClick={launch}
+            disabled={busy || !projectDir.trim() || !displayName.trim() || previewAgents.length === 0}
+          >
+            {busy ? 'Launching…' : 'Launch task'}
+          </button>
         </div>
       </div>
 
-      {run && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <div className="label">Active run</div>
-          <div className="row">
-            <span>workspace:</span>
-            <span className="tag">{run.workspaceDir}</span>
-            <button onClick={() => api().shell.openPath(run.workspaceDir)}>
-              Open in Finder
-            </button>
-          </div>
-          <div className="row" style={{ marginTop: 8 }}>
-            <span>started:</span>
-            <span className="muted">{new Date(run.startedAt).toLocaleString()}</span>
-          </div>
-          <div className="row" style={{ marginTop: 8 }}>
-            <span>iTerm2 window{run.windowIds.length > 1 ? 's' : ''}:</span>
-            {run.windowIds.length === 0 ? (
-              <span className="muted">none</span>
-            ) : (
-              run.windowIds.map((w) => (
-                <span key={w} className="tag" style={{ marginRight: 4 }}>{w}</span>
-              ))
-            )}
-          </div>
-          <div className="label" style={{ marginTop: 12 }}>Agents</div>
-          <div className="list">
-            {run.agents.map((a) => (
-              <div key={a.name} className="list-row">
-                <span>{a.name}</span>
+      <div className="row" style={{ marginTop: 20 }}>
+        <h3 style={{ margin: 0 }}>Running tasks</h3>
+        <span className="spacer" />
+        {tasks.length > 0 && (
+          <button
+            className="danger"
+            disabled={busy}
+            onClick={async () => {
+              if (!confirm(`Stop all ${tasks.length} tasks?`)) return
+              setBusy(true)
+              try {
+                await api().tasks.stopAll()
+                await refresh()
+              } finally {
+                setBusy(false)
+              }
+            }}
+          >
+            Stop all
+          </button>
+        )}
+      </div>
+
+      {tasks.length === 0 ? (
+        <div className="muted" style={{ marginTop: 8 }}>
+          No tasks running. Fill the form above and hit Launch.
+        </div>
+      ) : (
+        <div className="col" style={{ gap: 10, marginTop: 8 }}>
+          {tasks.map((t) => (
+            <div key={t.taskId} className="card col">
+              <div className="row">
+                <div className="col" style={{ gap: 2 }}>
+                  <div style={{ fontSize: 16, fontWeight: 500 }}>{t.displayName}</div>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {new Date(t.startedAt).toLocaleString()} · {t.agents.length} agents
+                  </div>
+                </div>
                 <span className="spacer" />
-                <span className="tag">{a.sessionId}</span>
+                <button onClick={() => api().shell.openPath(t.projectDir)}>Open project</button>
+                <button onClick={() => api().shell.openPath(t.workspaceDir)}>
+                  Open workspace
+                </button>
+                <button className="danger" onClick={() => stop(t.taskId)} disabled={busy}>
+                  Stop
+                </button>
+              </div>
+              <div className="row" style={{ flexWrap: 'wrap', gap: 4 }}>
+                <span className="muted" style={{ fontSize: 12 }}>cwd:</span>
+                <span className="tag">{t.projectDir}</span>
+              </div>
+              <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
+                {t.agents.map((a) => (
+                  <span
+                    key={a.name}
+                    className="tag"
+                    title={a.claudeSessionId ? `claude session: ${a.claudeSessionId}` : 'no session id'}
+                  >
+                    {a.name}
+                    {a.claudeSessionId && (
+                      <span className="muted" style={{ marginLeft: 6, fontSize: 10 }}>
+                        {a.claudeSessionId.slice(0, 8)}
+                      </span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="row" style={{ marginTop: 24 }}>
+        <h3 style={{ margin: 0 }}>History</h3>
+        <span className="spacer" />
+      </div>
+      {history.filter((h) => !tasks.find((t) => t.taskId === h.taskId)).length === 0 ? (
+        <div className="muted" style={{ marginTop: 8 }}>
+          Past runs will appear here.
+        </div>
+      ) : (
+        <div className="col" style={{ gap: 6, marginTop: 8 }}>
+          {history
+            .filter((h) => !tasks.find((t) => t.taskId === h.taskId))
+            .map((h) => (
+              <div key={h.taskId} className="card col" style={{ gap: 4 }}>
+                <div className="row">
+                  <div className="col" style={{ gap: 2 }}>
+                    <div style={{ fontWeight: 500 }}>{h.displayName}</div>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {new Date(h.startedAt).toLocaleString()} · {h.status} ·{' '}
+                      <span className="tag">{h.clientTemplate}</span> · {h.agents.length} agents
+                    </div>
+                  </div>
+                  <span className="spacer" />
+                  <button onClick={() => api().shell.openPath(h.workspaceDir)}>Open workspace</button>
+                  <button
+                    className="primary"
+                    disabled={busy || h.status !== 'stopped' || !h.agents.some((a) => a.claudeSessionId)}
+                    title={
+                      h.status !== 'stopped'
+                        ? 'Run already in progress'
+                        : !h.agents.some((a) => a.claudeSessionId)
+                        ? 'No saved Claude session ids — cannot resume'
+                        : 'Reopen panes and continue each agent\'s chat'
+                    }
+                    onClick={async () => {
+                      setBusy(true)
+                      setError(null)
+                      try {
+                        await api().tasks.resume(h.taskId)
+                        await refresh()
+                      } catch (e) {
+                        setError(String(e instanceof Error ? e.message : e))
+                      } finally {
+                        setBusy(false)
+                      }
+                    }}
+                  >
+                    Resume
+                  </button>
+                  <button
+                    className="danger"
+                    onClick={async () => {
+                      if (!confirm(`Delete run record for "${h.displayName}"? Workspace files stay on disk.`)) return
+                      await api().runs.delete(h.taskId)
+                      await refresh()
+                    }}
+                  >
+                    Forget
+                  </button>
+                </div>
+                <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
+                  {h.agents.map((a) => (
+                    <span
+                      key={a.name}
+                      className="tag"
+                      title={a.claudeSessionId ? `claude session: ${a.claudeSessionId}` : 'no session id'}
+                    >
+                      {a.name}
+                      {a.claudeSessionId && (
+                        <span className="muted" style={{ marginLeft: 6, fontSize: 10 }}>
+                          {a.claudeSessionId.slice(0, 8)}
+                        </span>
+                      )}
+                    </span>
+                  ))}
+                </div>
               </div>
             ))}
-          </div>
         </div>
       )}
     </div>

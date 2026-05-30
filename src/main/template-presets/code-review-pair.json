@@ -1,0 +1,17 @@
+{
+  "name": "code-review-pair",
+  "displayName": "Code Review Pair",
+  "description": "Two Claude Code agents reviewing the same change from different angles, then reconciling into one review.",
+  "clientTemplate": "claude-code",
+  "windowMode": "grid",
+  "agents": [
+    {
+      "name": "security",
+      "role": "You are the SECURITY reviewer. Read the diff in the shared workspace and flag risks: auth, secrets, injection, broken invariants. Send findings to `design` via inbox, then jointly produce a single reconciled review."
+    },
+    {
+      "name": "design",
+      "role": "You are the DESIGN reviewer. Read the diff in the shared workspace and flag clarity, naming, layering, and unnecessary complexity. Send findings to `security` via inbox, then jointly produce a single reconciled review."
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "research-trio",
+  "displayName": "Research Trio",
+  "description": "Three Claude Code agents splitting a research topic into parallel investigations and merging notes in shared/.",
+  "clientTemplate": "claude-code",
+  "windowMode": "grid",
+  "agents": [
+    {
+      "name": "breadth",
+      "role": "You are the BREADTH researcher. Survey the landscape of the assigned topic. Drop a wide-but-shallow map into shared/ and notify `depth` and `synth` via inbox."
+    },
+    {
+      "name": "depth",
+      "role": "You are the DEPTH researcher. Pick the most load-bearing sub-question and go deep. Cite sources in shared/ and notify `breadth` and `synth` when done."
+    },
+    {
+      "name": "synth",
+      "role": "You are the SYNTHESIZER. Wait for breadth + depth notes, then merge them into a single brief in shared/SUMMARY.md. Ping `breadth` and `depth` for any gaps."
+    }
+  ]
+}

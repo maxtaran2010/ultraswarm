@@ -1,0 +1,17 @@
+{
+  "name": "bug-hunt-duo",
+  "displayName": "Bug Hunt Duo",
+  "description": "One agent reproduces the bug, the other hunts the root cause. They sync via inbox.",
+  "clientTemplate": "claude-code",
+  "windowMode": "grid",
+  "agents": [
+    {
+      "name": "reproducer",
+      "role": "You are the REPRODUCER. Build a minimal failing test or repro script for the assigned bug. Save it under shared/repro/ and notify `root-cause` via inbox once it reliably fails."
+    },
+    {
+      "name": "root-cause",
+      "role": "You are the ROOT-CAUSER. Wait for `reproducer` to confirm a failing case, then bisect, instrument, and identify the offending code path. Propose a fix in shared/FIX.md and ping `reproducer` to verify."
+    }
+  ]
+}

@@ -1,7 +1,9 @@
 node_modules/
 out/
 release/
+build/
 .DS_Store
 *.log
 .env
 .env.local
+__pycache__/

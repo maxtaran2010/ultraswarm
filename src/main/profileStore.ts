@@ -47,7 +47,7 @@ export class ProfileStore {
       if (!f.endsWith('.json')) continue
       try {
         const raw = await fs.readFile(join(AGENTS_DIR, f), 'utf8')
-        out.push(AgentProfileSchema.parse(JSON.parse(raw)))
+        out.push(this.applyMigrations(AgentProfileSchema.parse(JSON.parse(raw))))
       } catch (err) {
         console.error(`[ProfileStore] failed to load ${f}:`, err)
       }
@@ -59,7 +59,26 @@ export class ProfileStore {
     const path = join(AGENTS_DIR, `${name}.json`)
     if (!(await fileExists(path))) return null
     const raw = await fs.readFile(path, 'utf8')
-    return AgentProfileSchema.parse(JSON.parse(raw))
+    const parsed = AgentProfileSchema.parse(JSON.parse(raw))
+    return this.applyMigrations(parsed)
+  }
+
+  /**
+   * Patch up older profile files written before a feature existed. Right now
+   * that's just `resumeArgs` for claude-code: early versions seeded a config
+   * without it, so Resume silently falls back to plain `args` and starts a
+   * fresh chat instead of `--resume <uuid>`. We don't rewrite the file — the
+   * patch only applies in-memory so the user's edits aren't clobbered.
+   */
+  private applyMigrations(p: AgentProfile): AgentProfile {
+    if (p.command === 'claude' && (!p.resumeArgs || p.resumeArgs.length === 0)) {
+      const passthrough = p.args.filter((a) => a !== '--session-id' && !/^[0-9a-f-]{36}$/i.test(a))
+      return {
+        ...p,
+        resumeArgs: [...passthrough, '--resume', '{{session_id}}']
+      }
+    }
+    return p
   }
 
   async save(profile: AgentProfile): Promise<AgentProfile> {

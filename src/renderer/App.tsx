@@ -1,9 +1,9 @@
 import React, { useState } from 'react'
 import { Dashboard } from './pages/Dashboard'
-import { Agents } from './pages/Agents'
+import { Templates } from './pages/Templates'
 import { Settings } from './pages/Settings'
 
-type Page = 'dashboard' | 'agents' | 'settings'
+type Page = 'dashboard' | 'templates' | 'settings'
 
 export function App(): JSX.Element {
   const [page, setPage] = useState<Page>('dashboard')
@@ -20,8 +20,8 @@ export function App(): JSX.Element {
             Dashboard
           </button>
           <button
-            className={page === 'agents' ? 'active' : ''}
-            onClick={() => setPage('agents')}
+            className={page === 'templates' ? 'active' : ''}
+            onClick={() => setPage('templates')}
           >
             Templates
           </button>
@@ -35,7 +35,7 @@ export function App(): JSX.Element {
       </aside>
       <main className="main">
         {page === 'dashboard' && <Dashboard />}
-        {page === 'agents' && <Agents />}
+        {page === 'templates' && <Templates />}
         {page === 'settings' && <Settings />}
       </main>
     </div>

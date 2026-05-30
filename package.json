@@ -32,11 +32,15 @@
   "build": {
     "appId": "dev.ccswarm.app",
     "productName": "ccswarm",
-    "directories": { "output": "release" },
+    "directories": { "output": "release", "buildResources": "build" },
     "files": ["out/**/*", "resources/**/*", "package.json"],
-    "extraResources": [{ "from": "resources", "to": "resources" }],
+    "extraResources": [
+      { "from": "resources", "to": "resources" },
+      { "from": "build/icon.png", "to": "build/icon.png" }
+    ],
     "mac": {
       "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png",
       "target": ["dmg"]
     }
   }

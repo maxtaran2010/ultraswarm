@@ -18,6 +18,30 @@ function defaults(): Settings {
   })
 }
 
+/**
+ * Convert pre-named-agents settings (instanceCount + namePrefix + roles[])
+ * into the new agents[] shape in place. Old configs on disk would otherwise
+ * fail Zod validation on first load.
+ */
+function migrateLegacySwarm(parsed: { swarm?: Record<string, unknown> }): void {
+  const sw = parsed.swarm
+  if (!sw || typeof sw !== 'object') return
+  if (Array.isArray(sw.agents)) return
+  const count = typeof sw.instanceCount === 'number' ? sw.instanceCount : 0
+  if (count <= 0) return
+  const prefix = typeof sw.namePrefix === 'string' && sw.namePrefix.length > 0 ? sw.namePrefix : 'agent'
+  const roles = Array.isArray(sw.roles) ? (sw.roles as unknown[]) : []
+  const agents: { name: string; role: string }[] = []
+  for (let i = 0; i < count; i++) {
+    const role = typeof roles[i] === 'string' ? (roles[i] as string) : ''
+    agents.push({ name: `${prefix}-${i + 1}`, role })
+  }
+  sw.agents = agents
+  delete sw.instanceCount
+  delete sw.namePrefix
+  delete sw.roles
+}
+
 export class SettingsStore {
   private cached: Settings | null = null
 
@@ -34,7 +58,9 @@ export class SettingsStore {
 
   async load(): Promise<Settings> {
     const raw = await fs.readFile(CONFIG_FILE, 'utf8')
-    const merged = { ...defaults(), ...JSON.parse(raw) }
+    const parsed = JSON.parse(raw)
+    migrateLegacySwarm(parsed)
+    const merged = { ...defaults(), ...parsed }
     this.cached = SettingsSchema.parse(merged)
     return this.cached
   }
