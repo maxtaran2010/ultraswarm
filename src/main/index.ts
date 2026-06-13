@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification, powerSaveBlocker, shell } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { ProfileStore } from './profileStore'
@@ -9,6 +9,7 @@ import { WorkspaceManager } from './workspaceManager'
 import { ITermDriver } from './itermDriver'
 import { SwarmController } from './swarmController'
 import { TelegramBot } from './telegramBot'
+import { checkSetup, runSetup } from './setupCheck'
 import {
   AgentProfileSchema,
   LaunchTaskRequestSchema,
@@ -18,7 +19,7 @@ import {
 import { DEFAULT_PROTOCOL_TEMPLATE } from './defaultProtocol'
 const isDev = !app.isPackaged
 
-app.setName('ccswarm')
+app.setName('ultraswarm')
 
 function resolveIcon(): string | undefined {
   const candidates = [
@@ -29,6 +30,17 @@ function resolveIcon(): string | undefined {
 }
 
 let mainWindow: BrowserWindow | null = null
+let sleepBlockerId: number | null = null
+
+function applySleepBlocker(prevent: boolean): void {
+  if (prevent && sleepBlockerId === null) {
+    sleepBlockerId = powerSaveBlocker.start('prevent-display-sleep')
+  } else if (!prevent && sleepBlockerId !== null) {
+    powerSaveBlocker.stop(sleepBlockerId)
+    sleepBlockerId = null
+  }
+}
+
 let profileStore: ProfileStore
 let settingsStore: SettingsStore
 let templateStore: SwarmTemplateStore
@@ -43,7 +55,7 @@ async function createWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 760,
-    title: 'ccswarm',
+    title: 'ultraswarm',
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#1a1a1a',
     ...(icon ? { icon } : {}),
@@ -81,6 +93,7 @@ function registerIpc(): void {
   ipcMain.handle('settings:save', async (_e, raw: unknown) => {
     const parsed = SettingsSchema.parse(raw)
     const saved = await settingsStore.save(parsed)
+    applySleepBlocker(saved.general.preventSleep)
     await telegram.syncFromSettings()
     return saved
   })
@@ -104,11 +117,7 @@ function registerIpc(): void {
     const current = await settingsStore.load()
     const next = SettingsSchema.parse({
       ...current,
-      swarm: {
-        clientTemplate: tpl.clientTemplate,
-        windowMode: tpl.windowMode,
-        agents: tpl.agents
-      }
+      swarm: { ...current.swarm, agents: tpl.agents }
     })
     return settingsStore.save(next)
   })
@@ -117,8 +126,14 @@ function registerIpc(): void {
   ipcMain.handle('tasks:launch', async (_e, raw: unknown) => {
     const req = LaunchTaskRequestSchema.parse(raw)
     const summary = await controller.launch(req)
+    if (Notification.isSupported()) {
+      new Notification({
+        title: 'ultraswarm — task launched',
+        body: `${summary.displayName} · ${summary.agents.length} agents · skill installed`
+      }).show()
+    }
     void telegram.notify(
-      `🚀 ccswarm launched: ${summary.displayName}\n` +
+      `🚀 ultraswarm launched: ${summary.displayName}\n` +
         `task: ${summary.taskId}\n` +
         `agents: ${summary.agents.map((a) => a.name).join(', ')}`
     )
@@ -126,15 +141,18 @@ function registerIpc(): void {
   })
   ipcMain.handle('tasks:stop', async (_e, taskId: string) => {
     await controller.stop(taskId)
-    void telegram.notify(`🛑 ccswarm stopped: ${taskId}`)
+    void telegram.notify(`🛑 ultraswarm stopped: ${taskId}`)
   })
   ipcMain.handle('tasks:stopAll', async () => {
     await controller.stopAll()
-    void telegram.notify('🛑 ccswarm: stopped all tasks')
+    void telegram.notify('🛑 ultraswarm: stopped all tasks')
+  })
+  ipcMain.handle('tasks:resendProtocols', async (_e, taskId: string) => {
+    await controller.resendProtocols(taskId)
   })
   ipcMain.handle('tasks:resume', async (_e, taskId: string) => {
     const summary = await controller.resume(taskId)
-    void telegram.notify(`▶️ ccswarm resumed: ${summary.displayName} (${summary.taskId})`)
+    void telegram.notify(`▶️ ultraswarm resumed: ${summary.displayName} (${summary.taskId})`)
     return summary
   })
 
@@ -156,6 +174,9 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('shell:openPath', async (_e, p: string) => shell.openPath(p))
+
+  ipcMain.handle('setup:check', async () => checkSetup())
+  ipcMain.handle('setup:run', async () => runSetup())
 }
 
 app.whenReady().then(async () => {
@@ -174,12 +195,18 @@ app.whenReady().then(async () => {
   templateStore = new SwarmTemplateStore()
   runStore = new RunStore()
   workspaceManager = new WorkspaceManager()
+  const setupResult = await runSetup()
+  if (setupResult.errors.length > 0) {
+    console.warn('[setup]', setupResult.errors.join('; '))
+  }
+
   await profileStore.init()
   await settingsStore.init()
   await templateStore.init()
   await runStore.init()
 
   const settings = settingsStore.current()
+  applySleepBlocker(settings.general.preventSleep)
   driver = new ITermDriver(settings.pythonPath)
   controller = new SwarmController(profileStore, settingsStore, templateStore, workspaceManager, driver, runStore)
   telegram = new TelegramBot(settingsStore, controller, runStore)

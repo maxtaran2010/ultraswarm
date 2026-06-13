@@ -2,8 +2,6 @@
   "name": "bug-hunt-duo",
   "displayName": "Bug Hunt Duo",
   "description": "One agent reproduces the bug, the other hunts the root cause. They sync via inbox.",
-  "clientTemplate": "claude-code",
-  "windowMode": "grid",
   "agents": [
     {
       "name": "reproducer",

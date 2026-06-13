@@ -19,10 +19,7 @@ async function fileExists(p: string): Promise<boolean> {
 export class SwarmTemplateStore {
   async init(): Promise<void> {
     await ensureDir(TEMPLATES_DIR)
-    const entries = await fs.readdir(TEMPLATES_DIR)
-    if (entries.filter((e) => e.endsWith('.json')).length === 0) {
-      await this.seedFromPresets()
-    }
+    await this.seedFromPresets()
   }
 
   private async seedFromPresets(): Promise<void> {

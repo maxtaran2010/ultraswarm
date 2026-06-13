@@ -11,7 +11,7 @@ export function App(): JSX.Element {
   return (
     <div className="app">
       <aside className="sidebar">
-        <h1>ccswarm</h1>
+        <h1>ultraswarm</h1>
         <nav>
           <button
             className={page === 'dashboard' ? 'active' : ''}

@@ -2,12 +2,12 @@ import { app } from 'electron'
 import { join } from 'path'
 import { homedir } from 'os'
 
-export const CCSWARM_HOME = join(homedir(), '.ccswarm')
-export const AGENTS_DIR = join(CCSWARM_HOME, 'agents')
-export const TEMPLATES_DIR = join(CCSWARM_HOME, 'templates')
-export const RUNS_DIR = join(CCSWARM_HOME, 'runs')
-export const CONFIG_FILE = join(CCSWARM_HOME, 'config.json')
-export const DEFAULT_WORKSPACE_ROOT = join(CCSWARM_HOME, 'workspaces')
+export const ULTRASWARM_HOME = join(homedir(), '.ultraswarm')
+export const AGENTS_DIR = join(ULTRASWARM_HOME, 'agents')
+export const TEMPLATES_DIR = join(ULTRASWARM_HOME, 'templates')
+export const RUNS_DIR = join(ULTRASWARM_HOME, 'runs')
+export const CONFIG_FILE = join(ULTRASWARM_HOME, 'config.json')
+export const DEFAULT_WORKSPACE_ROOT = join(ULTRASWARM_HOME, 'workspaces')
 
 export function resourcesDir(): string {
   if (app.isPackaged) {

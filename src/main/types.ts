@@ -45,7 +45,7 @@ export const SwarmAgentSchema = z.object({
 export type SwarmAgent = z.infer<typeof SwarmAgentSchema>
 
 export const SwarmConfigSchema = z.object({
-  /** name of a ClientTemplate stored in ~/.ccswarm/agents/<name>.json */
+  /** name of a ClientTemplate stored in ~/.ultraswarm/agents/<name>.json */
   clientTemplate: z.string().default('claude-code'),
   /**
    * How agents are arranged in iTerm2.
@@ -66,7 +66,7 @@ export const SwarmConfigSchema = z.object({
 export type SwarmConfig = z.infer<typeof SwarmConfigSchema>
 
 export const SettingsSchema = z.object({
-  workspaceRoot: z.string().default('~/.ccswarm/workspaces'),
+  workspaceRoot: z.string().default('~/.ultraswarm/workspaces'),
   terminal: z.enum(['iterm2']).default('iterm2'),
   pythonPath: z.string().default('python3'),
   protocolTemplate: z.string(),
@@ -85,9 +85,10 @@ export const SettingsSchema = z.object({
   general: z
     .object({
       autoStart: z.boolean().default(false),
-      fontSize: z.number().int().min(8).max(48).default(13)
+      fontSize: z.number().int().min(8).max(48).default(13),
+      preventSleep: z.boolean().default(false)
     })
-    .default({ autoStart: false, fontSize: 13 })
+    .default({ autoStart: false, fontSize: 13, preventSleep: false })
 })
 export type Settings = z.infer<typeof SettingsSchema>
 
@@ -105,28 +106,28 @@ export interface RunSummary {
 
 /**
  * What the renderer sends when the user hits "New task" on the dashboard.
- * `templateName` references a saved SwarmTemplate; if null we fall back to
- * settings.swarm so the bare-Settings flow keeps working.
+ * `templateName` references a saved SwarmTemplate (agents only); if null we
+ * fall back to settings.swarm.agents. `clientTemplate` and `windowMode` are
+ * always chosen at launch time and are independent of the template.
  */
 export const LaunchTaskRequestSchema = z.object({
   templateName: z.string().min(1).nullable(),
   projectDir: z.string().min(1),
-  displayName: z.string().min(1).max(120)
+  displayName: z.string().min(1).max(120),
+  clientTemplate: z.string().min(1).default('claude-code'),
+  windowMode: z.enum(['grid', 'windows', 'tabs']).default('grid')
 })
 export type LaunchTaskRequest = z.infer<typeof LaunchTaskRequestSchema>
 
 /**
- * A SwarmTemplate is a ready-made bundle that describes a whole swarm:
- * which client config to launch and the named participants (each with their
- * own role prompt). Applying a template overwrites `settings.swarm` so the
- * user can one-click switch between curated team setups.
+ * A SwarmTemplate is a named team configuration: a set of agents with role
+ * prompts. The client config (which CLI to run) and window layout are chosen
+ * separately at launch time, so templates are reusable across any client.
  */
 export const SwarmTemplateSchema = z.object({
   name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'name must be alphanumeric/dash/underscore'),
   displayName: z.string().min(1),
   description: z.string().default(''),
-  clientTemplate: z.string().min(1),
-  windowMode: z.enum(['grid', 'windows', 'tabs']).default('grid'),
   agents: z.array(SwarmAgentSchema).min(1)
 })
 export type SwarmTemplate = z.infer<typeof SwarmTemplateSchema>

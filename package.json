@@ -1,9 +1,9 @@
 {
-  "name": "ccswarm",
+  "name": "ultraswarm",
   "version": "0.1.0",
   "description": "Universal macOS agent swarm launcher",
   "main": "out/main/index.js",
-  "author": "ccswarm",
+  "author": "ultraswarm",
   "license": "MIT",
   "scripts": {
     "dev": "electron-vite dev",
@@ -30,8 +30,8 @@
     "vite": "^5.3.5"
   },
   "build": {
-    "appId": "dev.ccswarm.app",
-    "productName": "ccswarm",
+    "appId": "dev.ultraswarm.app",
+    "productName": "ultraswarm",
     "directories": { "output": "release", "buildResources": "build" },
     "files": ["out/**/*", "resources/**/*", "package.json"],
     "extraResources": [

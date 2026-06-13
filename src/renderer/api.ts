@@ -35,6 +35,7 @@ export interface Settings {
   general: {
     autoStart: boolean
     fontSize: number
+    preventSleep: boolean
   }
 }
 
@@ -73,8 +74,6 @@ export interface SwarmTemplate {
   name: string
   displayName: string
   description: string
-  clientTemplate: string
-  windowMode: 'grid' | 'windows' | 'tabs'
   agents: SwarmAgent[]
 }
 
@@ -82,9 +81,11 @@ export interface LaunchTaskRequest {
   templateName: string | null
   projectDir: string
   displayName: string
+  clientTemplate: string
+  windowMode: 'grid' | 'windows' | 'tabs'
 }
 
-interface CcswarmApi {
+interface UltraswarmApi {
   profiles: {
     list(): Promise<ClientTemplate[]>
     get(name: string): Promise<ClientTemplate | null>
@@ -112,6 +113,7 @@ interface CcswarmApi {
     stop(taskId: string): Promise<void>
     stopAll(): Promise<void>
     resume(taskId: string): Promise<RunSummary>
+    resendProtocols(taskId: string): Promise<void>
   }
   runs: {
     list(): Promise<RunRecord[]>
@@ -128,8 +130,8 @@ interface CcswarmApi {
 
 declare global {
   interface Window {
-    ccswarm: CcswarmApi
+    ultraswarm: UltraswarmApi
   }
 }
 
-export const api = (): CcswarmApi => window.ccswarm
+export const api = (): UltraswarmApi => window.ultraswarm

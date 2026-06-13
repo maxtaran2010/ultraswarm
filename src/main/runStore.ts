@@ -18,7 +18,7 @@ async function fileExists(p: string): Promise<boolean> {
 
 /**
  * Tiny file-based store for run records. One JSON per task in
- * ~/.ccswarm/runs/<taskId>.json so it's trivial to inspect and survives
+ * ~/.ultraswarm/runs/<taskId>.json so it's trivial to inspect and survives
  * app crashes (no half-written multi-record file).
  */
 export class RunStore {

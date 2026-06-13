@@ -1,30 +1,38 @@
 import React, { useEffect, useState } from 'react'
-import { api, RunRecord, RunSummary, Settings, SwarmTemplate } from '../api'
+import { api, ClientTemplate, RunRecord, RunSummary, Settings, SwarmTemplate } from '../api'
 
 export function Dashboard(): JSX.Element {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [templates, setTemplates] = useState<SwarmTemplate[]>([])
+  const [profiles, setProfiles] = useState<ClientTemplate[]>([])
   const [tasks, setTasks] = useState<RunSummary[]>([])
   const [history, setHistory] = useState<RunRecord[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // New-task form state
-  const [templateName, setTemplateName] = useState<string>('') // '' = use Settings → Swarm
+  const [templateName, setTemplateName] = useState<string>('') // '' = use Settings → Swarm agents
+  const [clientTemplate, setClientTemplate] = useState<string>('claude-code')
+  const [windowMode, setWindowMode] = useState<'grid' | 'windows' | 'tabs'>('grid')
   const [projectDir, setProjectDir] = useState<string>('')
   const [displayName, setDisplayName] = useState<string>('')
 
   async function refresh(): Promise<void> {
-    const [s, list, running, runs] = await Promise.all([
+    const [s, list, profs, running, runs] = await Promise.all([
       api().settings.load(),
       api().templates.list(),
+      api().profiles.list(),
       api().tasks.list(),
       api().runs.list()
     ])
     setSettings(s)
     setTemplates(list)
+    setProfiles(profs)
     setTasks(running)
     setHistory(runs)
+    // Sync defaults from settings on first load
+    setClientTemplate((prev) => (prev === 'claude-code' ? s.swarm.clientTemplate : prev))
+    setWindowMode((prev) => (prev === 'grid' ? s.swarm.windowMode : prev))
   }
 
   useEffect(() => {
@@ -60,7 +68,9 @@ export function Dashboard(): JSX.Element {
       await api().tasks.launch({
         templateName: templateName || null,
         projectDir: projectDir.trim(),
-        displayName: displayName.trim()
+        displayName: displayName.trim(),
+        clientTemplate,
+        windowMode
       })
       setDisplayName('')
       await refresh()
@@ -87,9 +97,7 @@ export function Dashboard(): JSX.Element {
   if (!settings) return <div className="muted">Loading…</div>
 
   const selectedTemplate = templateName ? templates.find((t) => t.name === templateName) : null
-  const settingsAgents = settings.swarm.agents
-  const previewAgents = selectedTemplate ? selectedTemplate.agents : settingsAgents
-  const previewClient = selectedTemplate ? selectedTemplate.clientTemplate : settings.swarm.clientTemplate
+  const previewAgents = selectedTemplate ? selectedTemplate.agents : settings.swarm.agents
 
   return (
     <div>
@@ -112,12 +120,12 @@ export function Dashboard(): JSX.Element {
 
         <div className="row gap">
           <div style={{ flex: 1 }}>
-            <span className="label">Template</span>
+            <span className="label">Team template</span>
             <select value={templateName} onChange={(e) => setTemplateName(e.target.value)}>
-              <option value="">(use Settings → Swarm)</option>
+              <option value="">(use Settings → Swarm agents)</option>
               {templates.map((t) => (
                 <option key={t.name} value={t.name}>
-                  {t.displayName} — {t.agents.length}× {t.clientTemplate}
+                  {t.displayName} — {t.agents.length} agents
                 </option>
               ))}
             </select>
@@ -130,6 +138,33 @@ export function Dashboard(): JSX.Element {
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
             />
+          </div>
+        </div>
+
+        <div className="row gap">
+          <div style={{ flex: 1 }}>
+            <span className="label">Client config</span>
+            <select value={clientTemplate} onChange={(e) => setClientTemplate(e.target.value)}>
+              {profiles.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.displayName} ({p.name})
+                </option>
+              ))}
+              {profiles.length === 0 && (
+                <option value={clientTemplate}>{clientTemplate}</option>
+              )}
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <span className="label">Window layout</span>
+            <select
+              value={windowMode}
+              onChange={(e) => setWindowMode(e.target.value as typeof windowMode)}
+            >
+              <option value="grid">Grid (split panes)</option>
+              <option value="windows">Separate windows</option>
+              <option value="tabs">Tabs</option>
+            </select>
           </div>
         </div>
 
@@ -154,7 +189,9 @@ export function Dashboard(): JSX.Element {
         </div>
 
         <div className="muted" style={{ fontSize: 12 }}>
-          Will launch <strong>{previewAgents.length}</strong>× <span className="tag">{previewClient}</span>:{' '}
+          Will launch <strong>{previewAgents.length}</strong>×{' '}
+          <span className="tag">{clientTemplate}</span> in{' '}
+          <span className="tag">{windowMode}</span> mode:{' '}
           {previewAgents.map((a) => (
             <span key={a.name} className="tag" style={{ marginRight: 4 }}>
               {a.name}
@@ -215,6 +252,23 @@ export function Dashboard(): JSX.Element {
                 <button onClick={() => api().shell.openPath(t.projectDir)}>Open project</button>
                 <button onClick={() => api().shell.openPath(t.workspaceDir)}>
                   Open workspace
+                </button>
+                <button
+                  disabled={busy}
+                  title="Re-inject the initial protocol prompt into every agent pane"
+                  onClick={async () => {
+                    setBusy(true)
+                    setError(null)
+                    try {
+                      await api().tasks.resendProtocols(t.taskId)
+                    } catch (e) {
+                      setError(String(e instanceof Error ? e.message : e))
+                    } finally {
+                      setBusy(false)
+                    }
+                  }}
+                >
+                  Resend prompts
                 </button>
                 <button className="danger" onClick={() => stop(t.taskId)} disabled={busy}>
                   Stop

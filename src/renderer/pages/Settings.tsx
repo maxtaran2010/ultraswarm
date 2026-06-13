@@ -486,7 +486,7 @@ export function Settings(): JSX.Element {
               }
             />
             <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-              Only this chat can issue commands. Leave blank and ccswarm will
+              Only this chat can issue commands. Leave blank and ultraswarm will
               fill it in when you message the bot.
             </div>
           </div>
@@ -529,8 +529,10 @@ export function Settings(): JSX.Element {
             )}
           </div>
           <div className="muted" style={{ fontSize: 12 }}>
-            Bot commands: <span className="tag">/status</span>{' '}
-            <span className="tag">/help</span>
+            Bot commands:{' '}
+            {['/status', '/agents', '/inbox', '/sent', '/log', '/msg', '/snap', '/help'].map((c) => (
+              <span key={c} className="tag" style={{ marginRight: 4 }}>{c}</span>
+            ))}
           </div>
         </div>
       )}
@@ -546,6 +548,19 @@ export function Settings(): JSX.Element {
               }
             />
             <span>Launch swarm on app start</span>
+          </label>
+          <label className="row">
+            <input
+              type="checkbox"
+              checked={draft.general.preventSleep ?? false}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  general: { ...draft.general, preventSleep: e.target.checked }
+                })
+              }
+            />
+            <span>Prevent display sleep while app is running</span>
           </label>
           <div>
             <span className="label">Terminal font size</span>

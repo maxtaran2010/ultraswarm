@@ -80,14 +80,25 @@ export class WorkspaceManager {
     const protocolFile = join(root, 'PROTOCOL.md')
     await fs.writeFile(protocolFile, settings.protocolTemplate, 'utf8')
 
-    const srcCli = join(resourcesDir(), 'swarm-msg.py')
-    const dstCli = join(binDir, 'swarm-msg')
-    try {
-      await fs.copyFile(srcCli, dstCli)
-      await fs.chmod(dstCli, 0o755)
-    } catch (err) {
-      console.error('[WorkspaceManager] failed to install swarm-msg:', err)
+    for (const [script, bin] of [
+      ['swarm-msg.py', 'swarm-msg'],
+      ['swarm-plan.py', 'swarm-plan']
+    ] as [string, string][]) {
+      try {
+        await fs.copyFile(join(resourcesDir(), script), join(binDir, bin))
+        await fs.chmod(join(binDir, bin), 0o755)
+      } catch (err) {
+        console.error(`[WorkspaceManager] failed to install ${bin}:`, err)
+      }
     }
+
+    // Create initial shared plan
+    const planPath = join(sharedDir, 'PLAN.md')
+    try {
+      await fs.writeFile(planPath, '# Plan\n\n', 'utf8')
+    } catch { /* ignore */ }
+
+    await this.installSkill(root, agentDirs)
 
     return {
       taskId,
@@ -158,6 +169,8 @@ export class WorkspaceManager {
       agentDirs[name] = { cwd: projectDir, inbox, outbox, processed }
     }
 
+    await this.installSkill(root, agentDirs)
+
     // Best-effort: if the runId is encoded in taskId as <YYYYMMDD-HHMMSS>-<slug>,
     // recover it; otherwise empty. Not load-bearing.
     const runIdMatch = opts.taskId.match(/^(\d{8}-\d{6})/)
@@ -174,8 +187,25 @@ export class WorkspaceManager {
     }
   }
 
+  /** Copy SWARM_SKILL.md to <workspace>/SKILL.md. Returns true if newly installed. */
+  private async installSkill(root: string, _agentDirs: Workspace['agentDirs']): Promise<boolean> {
+    const dest = join(root, 'SKILL.md')
+    try {
+      await fs.access(dest)
+      return false // already installed
+    } catch { /* not yet */ }
+    const src = join(resourcesDir(), 'SWARM_SKILL.md')
+    try {
+      await fs.copyFile(src, dest)
+      return true
+    } catch (err) {
+      console.error('[WorkspaceManager] failed to install SKILL.md:', err)
+      return false
+    }
+  }
+
   agentMarker(taskId: string, agentName: string): string {
-    return `<!-- ccswarm-agent: ${agentName} task: ${taskId} -->`
+    return `<!-- ultraswarm-agent: ${agentName} task: ${taskId} -->`
   }
 
   renderAgentProtocol(

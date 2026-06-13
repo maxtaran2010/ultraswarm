@@ -2,8 +2,6 @@
   "name": "code-review-pair",
   "displayName": "Code Review Pair",
   "description": "Two Claude Code agents reviewing the same change from different angles, then reconciling into one review.",
-  "clientTemplate": "claude-code",
-  "windowMode": "grid",
   "agents": [
     {
       "name": "security",

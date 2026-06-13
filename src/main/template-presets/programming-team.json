@@ -2,8 +2,6 @@
   "name": "programming-team",
   "displayName": "Programming Team",
   "description": "A small product team: a tech lead who plans and reviews, a backend engineer, a frontend engineer, and a generalist helper for tests, docs, and glue work.",
-  "clientTemplate": "claude-code",
-  "windowMode": "grid",
   "agents": [
     {
       "name": "lead",

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { api, ClientTemplate, SwarmAgent, SwarmTemplate } from '../api'
+import { api, SwarmAgent, SwarmTemplate } from '../api'
 
 const NAME_RE = /^[a-zA-Z0-9_-]+$/
 
@@ -7,8 +7,6 @@ const BLANK: SwarmTemplate = {
   name: 'new-template',
   displayName: 'New Template',
   description: '',
-  clientTemplate: 'claude-code',
-  windowMode: 'grid',
   agents: [
     { name: 'agent-1', role: '' },
     { name: 'agent-2', role: '' }
@@ -31,7 +29,6 @@ function validateAgents(agents: SwarmAgent[]): string | null {
 
 export function Templates(): JSX.Element {
   const [templates, setTemplates] = useState<SwarmTemplate[]>([])
-  const [configs, setConfigs] = useState<ClientTemplate[]>([])
   const [selectedName, setSelectedName] = useState<string | null>(null)
   const [draft, setDraft] = useState<SwarmTemplate | null>(null)
   const [original, setOriginal] = useState<SwarmTemplate | null>(null)
@@ -40,9 +37,8 @@ export function Templates(): JSX.Element {
   const [busy, setBusy] = useState(false)
 
   async function refresh(keepName?: string): Promise<void> {
-    const [list, cfgs] = await Promise.all([api().templates.list(), api().profiles.list()])
+    const list = await api().templates.list()
     setTemplates(list)
-    setConfigs(cfgs)
     const name = keepName ?? selectedName ?? list[0]?.name ?? null
     if (name) selectTemplate(name, list)
     else {
@@ -175,9 +171,10 @@ export function Templates(): JSX.Element {
       </div>
 
       <div className="muted" style={{ marginBottom: 12, fontSize: 12 }}>
-        A template is a ready-made swarm: which client config to launch and a named team
-        with custom role prompts. Pick one and hit <strong>Apply</strong> to write it
-        into <strong>Settings → Swarm</strong>, then launch from the Dashboard.
+        A template defines a named team with role prompts. The client config and window
+        layout are chosen separately when you launch a task. Hit{' '}
+        <strong>Apply to swarm</strong> to copy this team into Settings → Swarm as the
+        default.
       </div>
 
       <div className="row gap" style={{ alignItems: 'flex-start' }}>
@@ -194,7 +191,7 @@ export function Templates(): JSX.Element {
                 <div>
                   <div>{t.displayName}</div>
                   <div className="muted" style={{ fontSize: 11 }}>
-                    {t.agents.length}× {t.clientTemplate}
+                    {t.agents.length} agents
                   </div>
                 </div>
                 <span className="spacer" />
@@ -236,40 +233,6 @@ export function Templates(): JSX.Element {
                 onChange={(e) => patch({ description: e.target.value })}
                 placeholder="What is this swarm for?"
               />
-            </div>
-
-            <div className="row gap">
-              <div style={{ flex: 1 }}>
-                <span className="label">Client config</span>
-                <select
-                  value={draft.clientTemplate}
-                  onChange={(e) => patch({ clientTemplate: e.target.value })}
-                >
-                  {configs.map((c) => (
-                    <option key={c.name} value={c.name}>
-                      {c.displayName} ({c.name})
-                    </option>
-                  ))}
-                  {!configs.find((c) => c.name === draft.clientTemplate) && (
-                    <option value={draft.clientTemplate}>
-                      {draft.clientTemplate} (missing)
-                    </option>
-                  )}
-                </select>
-              </div>
-              <div style={{ flex: 1 }}>
-                <span className="label">Window layout</span>
-                <select
-                  value={draft.windowMode}
-                  onChange={(e) =>
-                    patch({ windowMode: e.target.value as SwarmTemplate['windowMode'] })
-                  }
-                >
-                  <option value="grid">Single window, split into panes (grid)</option>
-                  <option value="windows">Separate windows, tiled across screen</option>
-                  <option value="tabs">Single window, one tab per agent</option>
-                </select>
-              </div>
             </div>
 
             <div>

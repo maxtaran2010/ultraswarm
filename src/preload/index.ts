@@ -28,7 +28,8 @@ const api = {
     launch: (req: unknown) => ipcRenderer.invoke('tasks:launch', req),
     stop: (taskId: string) => ipcRenderer.invoke('tasks:stop', taskId),
     stopAll: () => ipcRenderer.invoke('tasks:stopAll'),
-    resume: (taskId: string) => ipcRenderer.invoke('tasks:resume', taskId)
+    resume: (taskId: string) => ipcRenderer.invoke('tasks:resume', taskId),
+    resendProtocols: (taskId: string) => ipcRenderer.invoke('tasks:resendProtocols', taskId)
   },
   runs: {
     list: () => ipcRenderer.invoke('runs:list'),
@@ -44,6 +45,6 @@ const api = {
   }
 }
 
-contextBridge.exposeInMainWorld('ccswarm', api)
+contextBridge.exposeInMainWorld('ultraswarm', api)
 
-export type CcswarmApi = typeof api
+export type UltraswarmApi = typeof api

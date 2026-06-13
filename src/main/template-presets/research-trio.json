@@ -2,8 +2,6 @@
   "name": "research-trio",
   "displayName": "Research Trio",
   "description": "Three Claude Code agents splitting a research topic into parallel investigations and merging notes in shared/.",
-  "clientTemplate": "claude-code",
-  "windowMode": "grid",
   "agents": [
     {
       "name": "breadth",

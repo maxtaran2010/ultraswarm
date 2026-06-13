@@ -1,5 +1,5 @@
 import { promises as fs } from 'fs'
-import { CCSWARM_HOME, CONFIG_FILE } from './paths'
+import { ULTRASWARM_HOME, CONFIG_FILE } from './paths'
 import { Settings, SettingsSchema } from './types'
 import { DEFAULT_PROTOCOL_TEMPLATE } from './defaultProtocol'
 
@@ -46,7 +46,7 @@ export class SettingsStore {
   private cached: Settings | null = null
 
   async init(): Promise<Settings> {
-    await fs.mkdir(CCSWARM_HOME, { recursive: true })
+    await fs.mkdir(ULTRASWARM_HOME, { recursive: true })
     if (!(await fileExists(CONFIG_FILE))) {
       const def = defaults()
       await fs.writeFile(CONFIG_FILE, JSON.stringify(def, null, 2) + '\n', 'utf8')

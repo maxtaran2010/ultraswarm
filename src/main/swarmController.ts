@@ -160,19 +160,18 @@ export class SwarmController {
   }
 
   private async resolve(req: LaunchTaskRequest, settings: Settings): Promise<ResolvedComposition> {
+    let agents: import('./types').SwarmAgent[]
     if (req.templateName) {
       const tpl = await this.templates.get(req.templateName)
       if (!tpl) throw new Error(`Template '${req.templateName}' not found`)
-      return {
-        agents: tpl.agents,
-        windowMode: tpl.windowMode,
-        clientTemplate: tpl.clientTemplate
-      }
+      agents = tpl.agents
+    } else {
+      agents = settings.swarm.agents
     }
     return {
-      agents: settings.swarm.agents,
-      windowMode: settings.swarm.windowMode,
-      clientTemplate: settings.swarm.clientTemplate
+      agents,
+      windowMode: req.windowMode,
+      clientTemplate: req.clientTemplate
     }
   }
 
@@ -311,6 +310,7 @@ export class SwarmController {
     }
     this.active.set(run.taskId, run)
     this.startInboxWatchers(run)
+    this.startPlanWatcher(run)
     await this.runs.save({
       taskId: run.taskId,
       displayName: run.displayName,
@@ -450,6 +450,7 @@ export class SwarmController {
     }
     this.active.set(run.taskId, run)
     this.startInboxWatchers(run)
+    this.startPlanWatcher(run)
     await this.runs.update(run.taskId, (r) => ({
       ...r,
       status: 'running',
@@ -461,6 +462,95 @@ export class SwarmController {
       }))
     }))
     return this.toSummary(run)
+  }
+
+  /** Inject arbitrary text into one agent's iTerm pane. */
+  async sendToAgent(taskId: string, agentName: string, text: string): Promise<void> {
+    const run = this.active.get(taskId)
+    if (!run) throw new Error(`Task '${taskId}' is not running`)
+    const agent = run.agents.find((a) => a.name === agentName)
+    if (!agent) throw new Error(`Agent '${agentName}' not found in task '${taskId}'`)
+    await this.driver.sendText(agent.sessionId, text + '\r')
+  }
+
+  /** Return filesystem paths and session ids for a specific agent. */
+  getAgentRecord(
+    taskId: string,
+    agentName: string
+  ): { inbox: string; outbox: string; processed: string; claudeSessionId: string | null; projectDir: string } | null {
+    const run = this.active.get(taskId)
+    if (!run) return null
+    const agent = run.agents.find((a) => a.name === agentName)
+    if (!agent) return null
+    const dirs = run.workspace.agentDirs[agentName]
+    if (!dirs) return null
+    return { ...dirs, claudeSessionId: agent.claudeSessionId, projectDir: run.projectDir }
+  }
+
+  async resendProtocols(taskId: string): Promise<void> {
+    const run = this.active.get(taskId)
+    if (!run) throw new Error(`Task '${taskId}' is not running`)
+    const record = await this.runs.get(taskId)
+    if (!record) throw new Error(`Run record for '${taskId}' not found`)
+    const template = await this.profiles.get(record.clientTemplate)
+    if (!template) throw new Error(`Client config '${record.clientTemplate}' not found`)
+    const settings = this.settings.current()
+    const peerNames = record.agents.map((a) => a.name)
+    for (const a of record.agents) {
+      const activeAgent = run.agents.find((ra) => ra.name === a.name)
+      if (!activeAgent) continue
+      const profile: AgentProfile = {
+        ...template,
+        name: a.name,
+        initialPrompt: a.role?.trim() ? a.role : template.initialPrompt
+      }
+      const peers = peerNames.filter((n) => n !== a.name)
+      const protocol = this.workspaces.renderAgentProtocol(settings, run.workspace, profile, peers)
+      await delay(300)
+      await this.driver.sendText(activeAgent.sessionId, protocol)
+      await delay(120)
+      await this.driver.sendText(activeAgent.sessionId, '\r')
+    }
+  }
+
+  /** Expose the shared plan path so callers (Telegram bot etc.) can read/send it. */
+  getSharedPlanPath(taskId: string): string | null {
+    const run = this.active.get(taskId)
+    return run ? join(run.workspace.sharedDir, 'PLAN.md') : null
+  }
+
+  private startPlanWatcher(run: ActiveRun): void {
+    const planPath = join(run.workspace.sharedDir, 'PLAN.md')
+    let timer: NodeJS.Timeout | null = null
+    let lastContent = ''
+
+    const watcher = watch(run.workspace.sharedDir, { persistent: false }, (_evt, filename) => {
+      if (filename !== 'PLAN.md') return
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(async () => {
+        timer = null
+        let content: string
+        try {
+          content = await fs.readFile(planPath, 'utf8')
+        } catch {
+          return
+        }
+        if (content === lastContent) return
+        lastContent = content
+        const msg =
+          `\n[plan updated]\n${content.trim()}\n` +
+          `(swarm-plan read | swarm-plan done N | swarm-plan add "item")\n`
+        for (const agent of run.agents) {
+          try {
+            await this.driver.sendText(agent.sessionId, msg)
+            await delay(100)
+            await this.driver.sendText(agent.sessionId, '\r')
+          } catch { /* agent may have stopped */ }
+        }
+      }, 400)
+    })
+    watcher.on('error', (e) => console.error('[SwarmController] plan watch error:', e))
+    run.watchers.push(watcher)
   }
 
   private startInboxWatchers(run: ActiveRun): void {
@@ -496,21 +586,45 @@ export class SwarmController {
     filename: string
   ): Promise<void> {
     const full = join(inboxDir, filename)
+    let raw: string
     try {
       const stat = await fs.stat(full)
       if (!stat.isFile()) return
+      raw = await fs.readFile(full, 'utf8')
     } catch {
       return
     }
-    const nudge =
-      `\n[ccswarm] new inbox message for ${agentName}. ` +
-      `Run \`swarm-msg read\` to see it.\n`
+
+    // Parse YAML frontmatter (--- ... ---\n) to extract `from:` field.
+    let sender = 'unknown'
+    let body = raw
+    const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/)
+    if (fmMatch) {
+      const fm = fmMatch[1]
+      body = fmMatch[2]
+      const fromLine = fm.split('\n').find((l) => l.startsWith('from:'))
+      if (fromLine) sender = fromLine.replace('from:', '').trim()
+    }
+
+    // Move to processed/ so the watcher doesn't re-fire.
+    const processedDir = join(inboxDir, 'processed')
     try {
-      await this.driver.sendText(sessionId, nudge)
+      await fs.rename(full, join(processedDir, filename))
+    } catch {
+      // processed/ should always exist; if rename fails, leave the file.
+    }
+
+    const msg =
+      `\n[inbox → ${agentName}] from: ${sender}\n` +
+      `${body.trimEnd()}\n` +
+      `(to reply: swarm-msg send ${sender} -m "...")\n`
+
+    try {
+      await this.driver.sendText(sessionId, msg)
       await delay(120)
       await this.driver.sendText(sessionId, '\r')
     } catch (e) {
-      console.error('[SwarmController] sendText nudge failed:', e)
+      console.error('[SwarmController] sendText inbox failed:', e)
     }
   }
 }

@@ -19,10 +19,7 @@ async function fileExists(p: string): Promise<boolean> {
 export class ProfileStore {
   async init(): Promise<void> {
     await ensureDir(AGENTS_DIR)
-    const entries = await fs.readdir(AGENTS_DIR)
-    if (entries.filter((e) => e.endsWith('.json')).length === 0) {
-      await this.seedFromPresets()
-    }
+    await this.seedFromPresets()
   }
 
   private async seedFromPresets(): Promise<void> {

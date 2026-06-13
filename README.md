@@ -1,80 +1,66 @@
-# ccswarm
+# ultraswarm
 
-Universal macOS launcher for swarms of CLI AI agents (Claude Code, Codex, Hermes,
-OpenClaw — anything that runs in a terminal).
+**macOS app for running swarms of AI agents — each in its own iTerm2 pane, all coordinated through a shared workspace.**
 
-It opens an iTerm2 window split into a grid, runs each agent in its own pane,
-auto-injects a protocol prompt that tells every agent how to read/write
-inter-agent messages via a shared workspace, and then steps out of the way so
-you can drive the agents interactively.
+Works with any CLI agent: Claude Code, OpenCode, Codex, Hermes, or a plain bash shell.
 
-## Prerequisites
+![](1.png)
 
-- macOS
-- [iTerm2](https://iterm2.com/) installed
-- iTerm2 Python API enabled: **iTerm2 → Settings → General → Magic → Enable Python API**
-- Python 3.9+ on your `PATH` with the iTerm2 SDK:
-  ```
-  python3 -m pip install iterm2
-  ```
-- Node.js 18+ and npm
+![](2.png)
 
-## Install & run (dev)
+---
+
+## What it does
+
+- Splits iTerm2 into N panes and launches one agent per pane
+- Auto-injects a protocol prompt so agents know how to coordinate
+- Delivers inter-agent messages directly into each agent's prompt
+- Broadcasts shared plan updates to every agent in real time
+- Telegram bot for remote monitoring, messaging agents, and screenshots
+
+---
+
+## Quickstart
 
 ```bash
 npm install
 npm run dev
 ```
 
-Build a packaged `.app`:
+> **Prerequisites:** macOS · [iTerm2](https://iterm2.com/) with Python API enabled · Python 3.9+ · Node 18+
+
+Enable iTerm2 Python API: *Settings → General → Magic → Enable Python API*
+
+---
+
+## How agents coordinate
+
+Each run gets a workspace at `~/.ultraswarm/workspaces/<run-id>/`:
+
+```
+shared/
+  PLAN.md        ← shared task list (swarm-plan)
+agents/<name>/
+  inbox/         ← peers drop messages here
+  outbox/
+SKILL.md         ← tool docs, auto-read by agents on launch
+```
+
+Two tools are on every agent's `PATH`:
 
 ```bash
-npm run dist
+swarm-msg send lead -m "PR is ready for review"   # message a peer
+swarm-plan add "write integration tests"           # add a plan item
+swarm-plan done 2                                  # mark item done
 ```
 
-## How it works
+When any agent updates the plan, all others receive it instantly in their prompt. Same for inbox messages — no polling, no `swarm-msg read`.
 
-```
-~/.ccswarm/
-├── agents/                    user-editable agent profiles (JSON)
-│   ├── claude-code.json       (seeded from presets on first run)
-│   ├── codex.json
-│   └── ...
-├── config.json                app settings (workspace root, protocol, ...)
-└── workspaces/<run-id>/       one directory per swarm launch
-    ├── PROTOCOL.md            rendered protocol document
-    ├── shared/                shared scratch space
-    └── agents/<agent>/
-        ├── inbox/             peers drop messages here
-        │   └── processed/     move handled messages here
-        └── outbox/
-```
+---
 
-When you click **Launch swarm**, the app:
+## Agent profiles
 
-1. Creates the per-run workspace dirs above.
-2. Asks iTerm2 (via a small Python helper, `resources/iterm-driver.py`) to
-   open one window split into N panes — `ceil(sqrt(N))` columns × the rows
-   needed.
-3. Types `cd <agent-cwd>; <command> <args>` into each pane.
-4. Waits each agent's `readyDelayMs`, then types the rendered protocol prompt
-   plus the agent's per-agent prompt as if you typed it.
-5. Stops orchestrating. From that point you drive the agents in the
-   terminal; agents talk to each other by writing files into peer inboxes
-   exactly as the protocol describes.
-
-## Settings UI
-
-- **Gateway / Workspace** — workspace root, terminal choice, Python path.
-- **Protocol Prompt** — the global template auto-injected to every agent.
-  Available variables: `{{agent_name}}`, `{{inbox}}`, `{{outbox}}`,
-  `{{shared_dir}}`, `{{workspace}}`, `{{peers_list}}`.
-- **General** — auto-start, font size.
-
-## Adding a new agent type
-
-Open the **Agents** tab → **New** (or **Duplicate** an existing preset). The
-profile is plain JSON:
+Profiles live in `~/.ultraswarm/agents/*.json`. Built-in ones (Claude Code, Codex, Hermes, …) are seeded on first launch. Add your own:
 
 ```json
 {
@@ -82,20 +68,33 @@ profile is plain JSON:
   "displayName": "My Agent",
   "command": "my-cli",
   "args": ["--flag"],
-  "env": { "MY_API_KEY": "..." },
+  "env": {},
   "cwd": "${workspace}/agents/${name}",
-  "initialPrompt": "Per-agent role description appended after the protocol.",
+  "initialPrompt": "Your role description here.",
   "readyDelayMs": 1500
 }
 ```
 
-Anything that reads stdin works — including `bash` itself, useful for testing.
+---
+
+## Telegram bot
+
+Set a bot token in *Settings → Telegram*, then:
+
+| Command | What it does |
+|---|---|
+| `/agents` | List active agents |
+| `/inbox lead` | Read agent's recent messages |
+| `/msg lead fix the tests` | Inject text into agent's pane |
+| `/log backend` | Last Claude responses |
+| `/snap` | Screenshot → photo |
+
+---
 
 ## Troubleshooting
 
-- *"iterm-driver did not become ready in time"* — open iTerm2 once, enable the
-  Python API, and confirm `python3 -c "import iterm2"` succeeds in your shell.
-- *Wrong Python* — set the interpreter in **Settings → Gateway / Workspace →
-  Python interpreter** (e.g. `/opt/homebrew/bin/python3`).
-- *Agent didn't receive the protocol* — increase that profile's
-  `readyDelayMs`; some CLIs take a few seconds before they accept stdin.
+**iTerm2 driver timeout** — enable the Python API in iTerm2 settings, confirm `python3 -c "import iterm2"` works.
+
+**Agent missed the protocol** — increase `readyDelayMs` in the agent profile.
+
+**Wrong Python** — set the path in *Settings → Gateway → Python interpreter*.
