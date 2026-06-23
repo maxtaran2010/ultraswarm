@@ -189,14 +189,22 @@ export function Dashboard(): JSX.Element {
         </div>
 
         <div className="muted" style={{ fontSize: 12 }}>
-          Will launch <strong>{previewAgents.length}</strong>×{' '}
-          <span className="tag">{clientTemplate}</span> in{' '}
-          <span className="tag">{windowMode}</span> mode:{' '}
-          {previewAgents.map((a) => (
-            <span key={a.name} className="tag" style={{ marginRight: 4 }}>
-              {a.name}
-            </span>
-          ))}
+          Will launch <strong>{previewAgents.length}</strong> agents in{' '}
+          <span className="tag">{windowMode}</span> mode (default client{' '}
+          <span className="tag">{clientTemplate}</span>):{' '}
+          {previewAgents.map((a) => {
+            const client = a.clientTemplate?.trim() || clientTemplate
+            return (
+              <span key={a.name} className="tag" style={{ marginRight: 4 }}>
+                {a.name}
+                {client !== clientTemplate && (
+                  <span className="muted" style={{ marginLeft: 4, fontSize: 10 }}>
+                    {client}
+                  </span>
+                )}
+              </span>
+            )
+          })}
         </div>
 
         <div className="row">

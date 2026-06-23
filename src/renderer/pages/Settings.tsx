@@ -562,6 +562,25 @@ export function Settings(): JSX.Element {
             />
             <span>Prevent display sleep while app is running</span>
           </label>
+          <label className="row">
+            <input
+              type="checkbox"
+              checked={draft.general.keepAwakeWithLidClosed ?? false}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  general: { ...draft.general, keepAwakeWithLidClosed: e.target.checked }
+                })
+              }
+            />
+            <span>Keep Mac awake with lid closed while agents run (screen still sleeps)</span>
+          </label>
+          <div className="muted" style={{ fontSize: 11, marginTop: -4, marginLeft: 24 }}>
+            While a task is running, prevents system sleep so closing the lid won&apos;t pause
+            agents — on AC and battery. Asks for your admin password once (uses{' '}
+            <code>pmset disablesleep</code>); automatically reverted when agents finish or the app
+            quits.
+          </div>
           <div>
             <span className="label">Terminal font size</span>
             <input

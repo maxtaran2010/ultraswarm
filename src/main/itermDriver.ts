@@ -25,6 +25,18 @@ export interface GridResult {
   cols: number
 }
 
+/** One run of same-styled terminal text (from get_screen_contents). */
+export interface StyledRun {
+  /** text */
+  t: string
+  /** foreground hex (#rrggbb) or null = terminal default */
+  f: string | null
+  /** background hex (#rrggbb) or null = terminal default */
+  b: string | null
+  /** bold */
+  bo: boolean
+}
+
 export class ITermDriver {
   private proc: ChildProcessWithoutNullStreams | null = null
   private pending = new Map<string, Pending>()
@@ -189,6 +201,14 @@ export class ITermDriver {
 
   sendText(sessionId: string, text: string): Promise<{ sent: number }> {
     return this.call('send_text', { session_id: sessionId, text })
+  }
+
+  checkSessionAlive(sessionId: string): Promise<{ alive: boolean }> {
+    return this.call('check_session_alive', { session_id: sessionId })
+  }
+
+  getScreenContents(sessionId: string): Promise<{ lines: string[]; styled?: StyledRun[][] }> {
+    return this.call('get_screen_contents', { session_id: sessionId }, 10_000)
   }
 
   closeWindow(windowId: string): Promise<{ closed: boolean }> {

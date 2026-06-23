@@ -289,6 +289,120 @@ async def send_text(connection: iterm2.Connection, session_id: str, text: str) -
     return {"sent": len(text)}
 
 
+async def check_session_alive(connection: iterm2.Connection, session_id: str) -> Dict[str, Any]:
+    app = await iterm2.async_get_app(connection)
+    session = app.get_session_by_id(session_id)
+    return {"alive": session is not None}
+
+
+# xterm 256-color palette → (r, g, b), so standard/256 colors render with the
+# right hue in the synthesized screenshot.
+_ANSI16 = [
+    (0, 0, 0), (205, 0, 0), (0, 205, 0), (205, 205, 0),
+    (0, 0, 238), (205, 0, 205), (0, 205, 205), (229, 229, 229),
+    (127, 127, 127), (255, 0, 0), (0, 255, 0), (255, 255, 0),
+    (92, 92, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255),
+]
+_CUBE = [0, 95, 135, 175, 215, 255]
+
+
+def _xterm256(idx: int):
+    if idx < 0:
+        return None
+    if idx < 16:
+        return _ANSI16[idx]
+    if idx < 232:
+        i = idx - 16
+        return (_CUBE[(i // 36) % 6], _CUBE[(i // 6) % 6], _CUBE[i % 6])
+    if idx < 256:
+        v = 8 + (idx - 232) * 10
+        return (v, v, v)
+    return None
+
+
+def _color_hex(color) -> Any:
+    """Map a CellStyle.Color to '#rrggbb', or None for default/alternate
+    colors (so the renderer can apply the terminal's default fg/bg)."""
+    if color is None:
+        return None
+    try:
+        if color.is_rgb:
+            c = color.rgb
+            return "#%02x%02x%02x" % (c.red, c.green, c.blue)
+        if color.is_standard:
+            rgb = _xterm256(color.standard)
+            return "#%02x%02x%02x" % rgb if rgb else None
+    except Exception:
+        return None
+    return None
+
+
+async def get_screen_contents(connection: iterm2.Connection, session_id: str) -> Dict[str, Any]:
+    """Return the visible terminal text of a session as styled runs, so the
+    synthesized screenshot preserves the terminal's colors. Works without the
+    physical (possibly locked/closed-lid) display.
+
+    Returns {"lines": [...plain text...], "styled": [[{t,f,b,bo}, ...], ...]}
+    where each run is text `t`, foreground `f`, background `b` (hex or null),
+    and bold `bo`."""
+    app = await iterm2.async_get_app(connection)
+    session = app.get_session_by_id(session_id)
+    if session is None:
+        raise RuntimeError(f"session {session_id} not found")
+    contents = await session.async_get_screen_contents()
+    lines: List[str] = []
+    styled: List[List[Dict[str, Any]]] = []
+    for i in range(contents.number_of_lines):
+        try:
+            line = contents.line(i)
+        except Exception:
+            lines.append("")
+            styled.append([])
+            continue
+        # Walk the line cell by cell (not via .string): blank cells are encoded
+        # as zero-code-point cells and drop out of .string, which collapses runs
+        # of spaces and breaks column alignment. string_at() lets us recover them.
+        runs: List[Dict[str, Any]] = []
+        chars: List[str] = []
+        cur = None
+        cur_key = None
+        for x in range(2000):  # bounded; string_at raises once past the last cell
+            try:
+                ch = line.string_at(x)
+            except Exception:
+                break
+            if ch == "" or ch == "\x00":
+                ch = " "  # blank/uninitialized cell → real space
+            chars.append(ch)
+            f = b = None
+            bo = False
+            try:
+                st = line.style_at(x)
+                if st is not None:
+                    f = _color_hex(st.fg_color)
+                    b = _color_hex(st.bg_color)
+                    bo = bool(st.bold)
+            except Exception:
+                pass
+            key = (f, b, bo)
+            if cur is not None and cur_key == key:
+                cur["t"] += ch
+            else:
+                cur = {"t": ch, "f": f, "b": b, "bo": bo}
+                cur_key = key
+                runs.append(cur)
+        # Drop trailing padding (uncolored spaces) so tiles aren't over-wide.
+        while runs and runs[-1]["t"].strip() == "" and not runs[-1]["b"]:
+            runs.pop()
+        lines.append("".join(chars).rstrip())
+        styled.append(runs)
+    # Trim trailing blank lines so the rendered image isn't mostly empty.
+    while lines and not lines[-1].strip():
+        lines.pop()
+        styled.pop()
+    return {"lines": lines, "styled": styled}
+
+
 async def close_window(connection: iterm2.Connection, window_id: str) -> Dict[str, Any]:
     app = await iterm2.async_get_app(connection)
     for w in app.windows:
@@ -326,6 +440,10 @@ async def dispatch(
         return await create_tabs(connection, int(params.get("count", 1)))
     if method == "send_text":
         return await send_text(connection, str(params["session_id"]), str(params["text"]))
+    if method == "check_session_alive":
+        return await check_session_alive(connection, str(params["session_id"]))
+    if method == "get_screen_contents":
+        return await get_screen_contents(connection, str(params["session_id"]))
     if method == "close_window":
         return await close_window(connection, str(params["window_id"]))
     if method == "close_windows":

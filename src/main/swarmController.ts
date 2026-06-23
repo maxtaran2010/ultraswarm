@@ -3,7 +3,7 @@ import { SettingsStore } from './settingsStore'
 import { SwarmTemplateStore } from './swarmTemplateStore'
 import { RunStore } from './runStore'
 import { WorkspaceManager, Workspace } from './workspaceManager'
-import { ITermDriver } from './itermDriver'
+import { ITermDriver, StyledRun } from './itermDriver'
 import { AgentProfile, LaunchTaskRequest, RunSummary, Settings, SwarmAgent } from './types'
 import { promises as fs, watch, FSWatcher } from 'fs'
 import { join } from 'path'
@@ -19,6 +19,18 @@ interface ActiveRun {
   agents: Array<{ name: string; sessionId: string; claudeSessionId: string | null }>
   startedAt: string
   watchers: FSWatcher[]
+  exitPoller?: NodeJS.Timeout
+  /** Cleared once the exit poller observes every agent's iTerm session is gone. */
+  live?: boolean
+}
+
+/** A single agent pane's captured terminal contents (plain + styled runs). */
+export interface AgentScreen {
+  taskId: string
+  displayName: string
+  agent: string
+  lines: string[]
+  styled?: StyledRun[][]
 }
 
 function shellEscape(s: string): string {
@@ -127,6 +139,22 @@ async function discoverRealSessionIds(
 
 export class SwarmController {
   private active = new Map<string, ActiveRun>()
+  onEvent?: (event: { type: 'agents_exited'; taskId: string; displayName: string }) => void
+  /** Fired whenever the set of runs with live agents changes (launch/stop/exit). */
+  onActiveChange?: () => void
+
+  /** True while at least one launched run still has live agents. */
+  hasLiveAgents(): boolean {
+    return Array.from(this.active.values()).some((r) => r.live !== false && r.agents.length > 0)
+  }
+
+  private notifyActiveChange(): void {
+    try {
+      this.onActiveChange?.()
+    } catch (e) {
+      console.error('[SwarmController] onActiveChange handler failed:', e)
+    }
+  }
 
   constructor(
     private profiles: ProfileStore,
@@ -183,13 +211,6 @@ export class SwarmController {
   async launch(req: LaunchTaskRequest): Promise<RunSummary> {
     const settings = this.settings.current()
     const composition = await this.resolve(req, settings)
-    const template = await this.profiles.get(composition.clientTemplate)
-    if (!template) {
-      throw new Error(
-        `Client config '${composition.clientTemplate}' not found. ` +
-          `Pick one in Settings → Configs.`
-      )
-    }
 
     if (composition.agents.length === 0) {
       throw new Error('Task must have at least one agent')
@@ -202,14 +223,35 @@ export class SwarmController {
       seen.add(a.name)
     }
 
-    const profiles: AgentProfile[] = composition.agents.map((a) => {
+    // Resolve each agent's client config: a per-agent override if set, else the
+    // swarm-wide client chosen at launch. This is what lets one swarm mix CLIs
+    // (e.g. some agents on codex, others on claude-code). Resolved before we open
+    // any iTerm windows so a bad config name fails fast.
+    const clientCache = new Map<string, AgentProfile>()
+    const resolveClient = async (name: string): Promise<AgentProfile> => {
+      const cached = clientCache.get(name)
+      if (cached) return cached
+      const tpl = await this.profiles.get(name)
+      if (!tpl) {
+        throw new Error(`Client config '${name}' not found. Pick one in Settings → Configs.`)
+      }
+      clientCache.set(name, tpl)
+      return tpl
+    }
+    const agentClients = composition.agents.map(
+      (a) => a.clientTemplate?.trim() || composition.clientTemplate
+    )
+    const profiles: AgentProfile[] = []
+    for (let i = 0; i < composition.agents.length; i++) {
+      const a = composition.agents[i]
+      const template = await resolveClient(agentClients[i])
       const role = a.role.trim()
-      return {
+      profiles.push({
         ...template,
         name: a.name,
         initialPrompt: role.length > 0 ? role : template.initialPrompt
-      }
-    })
+      })
+    }
 
     const workspace = await this.workspaces.create(settings, profiles, {
       projectDir: req.projectDir,
@@ -275,9 +317,7 @@ export class SwarmController {
         await this.driver.sendText(sessionId, profile.prelude)
         await delay(600)
       }
-      await this.driver.sendText(sessionId, protocol)
-      await delay(120)
-      await this.driver.sendText(sessionId, '\r')
+      await this.sendMessage(sessionId, protocol)
     }
 
     // Claude Code (and possibly other clients) ignore our `--session-id` for
@@ -306,11 +346,14 @@ export class SwarmController {
       workspace,
       agents,
       startedAt: new Date().toISOString(),
-      watchers: []
+      watchers: [],
+      live: true
     }
     this.active.set(run.taskId, run)
+    this.notifyActiveChange()
     this.startInboxWatchers(run)
     this.startPlanWatcher(run)
+    this.startExitPoller(run)
     await this.runs.save({
       taskId: run.taskId,
       displayName: run.displayName,
@@ -322,6 +365,7 @@ export class SwarmController {
       agents: run.agents.map((a, i) => ({
         name: a.name,
         role: composition.agents[i]?.role ?? '',
+        clientTemplate: agentClients[i],
         claudeSessionId: a.claudeSessionId,
         iterm2SessionId: a.sessionId
       })),
@@ -335,6 +379,10 @@ export class SwarmController {
   async stop(taskId: string): Promise<void> {
     const run = this.active.get(taskId)
     if (!run) return
+    if (run.exitPoller) {
+      clearInterval(run.exitPoller)
+      run.exitPoller = undefined
+    }
     for (const w of run.watchers) {
       try {
         w.close()
@@ -348,6 +396,7 @@ export class SwarmController {
       console.error(`[SwarmController] closeWindows failed for ${taskId}:`, err)
     }
     this.active.delete(taskId)
+    this.notifyActiveChange()
     try {
       await this.runs.update(taskId, (r) => ({
         ...r,
@@ -377,13 +426,27 @@ export class SwarmController {
     const record = await this.runs.get(taskId)
     if (!record) throw new Error(`Run '${taskId}' not found`)
 
-    const template = await this.profiles.get(record.clientTemplate)
-    if (!template) {
-      throw new Error(
-        `Client config '${record.clientTemplate}' from this run no longer exists. ` +
-          `Recreate it in Settings → Configs (or edit the run record).`
-      )
+    // Resolve each agent's client config (per-agent override, else the run's
+    // default). Pre-resolve everything up front so a missing config fails before
+    // we reopen any windows.
+    const clientCache = new Map<string, AgentProfile>()
+    const resolveClient = async (name: string): Promise<AgentProfile> => {
+      const cached = clientCache.get(name)
+      if (cached) return cached
+      const tpl = await this.profiles.get(name)
+      if (!tpl) {
+        throw new Error(
+          `Client config '${name}' from this run no longer exists. ` +
+            `Recreate it in Settings → Configs (or edit the run record).`
+        )
+      }
+      clientCache.set(name, tpl)
+      return tpl
     }
+    const agentClients = record.agents.map(
+      (a) => a.clientTemplate?.trim() || record.clientTemplate
+    )
+    for (const name of agentClients) await resolveClient(name)
 
     const workspace = await this.workspaces.open({
       taskId: record.taskId,
@@ -408,9 +471,10 @@ export class SwarmController {
     }
 
     const agents: ActiveRun['agents'] = []
-    const useResumeArgs = template.resumeArgs && template.resumeArgs.length > 0
     for (let i = 0; i < record.agents.length; i++) {
       const a = record.agents[i]
+      const template = await resolveClient(agentClients[i])
+      const useResumeArgs = template.resumeArgs && template.resumeArgs.length > 0
       const sessionId = grid.session_ids[i]
       const claudeSessionId = a.claudeSessionId ?? ''
       const dirs = workspace.agentDirs[a.name]
@@ -446,11 +510,14 @@ export class SwarmController {
       workspace,
       agents,
       startedAt,
-      watchers: []
+      watchers: [],
+      live: true
     }
     this.active.set(run.taskId, run)
+    this.notifyActiveChange()
     this.startInboxWatchers(run)
     this.startPlanWatcher(run)
+    this.startExitPoller(run)
     await this.runs.update(run.taskId, (r) => ({
       ...r,
       status: 'running',
@@ -470,7 +537,22 @@ export class SwarmController {
     if (!run) throw new Error(`Task '${taskId}' is not running`)
     const agent = run.agents.find((a) => a.name === agentName)
     if (!agent) throw new Error(`Agent '${agentName}' not found in task '${taskId}'`)
-    await this.driver.sendText(agent.sessionId, text + '\r')
+    await this.sendMessage(agent.sessionId, text)
+  }
+
+  /**
+   * Inject a message into an agent's Claude Code TUI and submit it.
+   *
+   * The body is wrapped in bracketed-paste markers (ESC[200~ … ESC[201~) so the
+   * TUI sees a paste with a well-defined end, then Enter is sent as a separate
+   * write. Without the end marker, the trailing CR can be coalesced into the
+   * same PTY read as the body and inserted as a literal newline — which is why
+   * messages sometimes landed in the input box but were never sent.
+   */
+  private async sendMessage(sessionId: string, text: string): Promise<void> {
+    await this.driver.sendText(sessionId, `\x1b[200~${text}\x1b[201~`)
+    await delay(120)
+    await this.driver.sendText(sessionId, '\r')
   }
 
   /** Return filesystem paths and session ids for a specific agent. */
@@ -492,13 +574,14 @@ export class SwarmController {
     if (!run) throw new Error(`Task '${taskId}' is not running`)
     const record = await this.runs.get(taskId)
     if (!record) throw new Error(`Run record for '${taskId}' not found`)
-    const template = await this.profiles.get(record.clientTemplate)
-    if (!template) throw new Error(`Client config '${record.clientTemplate}' not found`)
     const settings = this.settings.current()
     const peerNames = record.agents.map((a) => a.name)
     for (const a of record.agents) {
       const activeAgent = run.agents.find((ra) => ra.name === a.name)
       if (!activeAgent) continue
+      const tplName = a.clientTemplate?.trim() || record.clientTemplate
+      const template = await this.profiles.get(tplName)
+      if (!template) throw new Error(`Client config '${tplName}' not found`)
       const profile: AgentProfile = {
         ...template,
         name: a.name,
@@ -507,16 +590,70 @@ export class SwarmController {
       const peers = peerNames.filter((n) => n !== a.name)
       const protocol = this.workspaces.renderAgentProtocol(settings, run.workspace, profile, peers)
       await delay(300)
-      await this.driver.sendText(activeAgent.sessionId, protocol)
-      await delay(120)
-      await this.driver.sendText(activeAgent.sessionId, '\r')
+      await this.sendMessage(activeAgent.sessionId, protocol)
     }
+  }
+
+  /**
+   * Read the live terminal text of every active agent pane. Used to synthesize
+   * a screenshot of the swarm without capturing the physical display (which is
+   * black/locked when the lid is closed). If `taskId` is given, only that task's
+   * agents are captured; otherwise all active runs.
+   */
+  async captureScreens(taskId?: string): Promise<AgentScreen[]> {
+    const runs = taskId
+      ? ([this.active.get(taskId)].filter(Boolean) as ActiveRun[])
+      : Array.from(this.active.values())
+    const out: AgentScreen[] = []
+    for (const run of runs) {
+      for (const a of run.agents) {
+        let lines: string[]
+        let styled: StyledRun[][] | undefined
+        try {
+          const res = await this.driver.getScreenContents(a.sessionId)
+          lines = res.lines
+          styled = res.styled
+        } catch (e) {
+          lines = [`(could not read pane: ${e instanceof Error ? e.message : String(e)})`]
+          styled = undefined
+        }
+        out.push({ taskId: run.taskId, displayName: run.displayName, agent: a.name, lines, styled })
+      }
+    }
+    return out
   }
 
   /** Expose the shared plan path so callers (Telegram bot etc.) can read/send it. */
   getSharedPlanPath(taskId: string): string | null {
     const run = this.active.get(taskId)
     return run ? join(run.workspace.sharedDir, 'PLAN.md') : null
+  }
+
+  private startExitPoller(run: ActiveRun): void {
+    const POLL_MS = 45_000
+    const timer = setInterval(async () => {
+      const active = this.active.get(run.taskId)
+      if (!active) { clearInterval(timer); return }
+      if (active.agents.length === 0) { clearInterval(timer); return }
+      try {
+        const results = await Promise.allSettled(
+          active.agents.map((a) => this.driver.checkSessionAlive(a.sessionId))
+        )
+        const allGone = results.every(
+          (r) => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.alive)
+        )
+        if (allGone) {
+          clearInterval(timer)
+          active.exitPoller = undefined
+          active.live = false
+          this.notifyActiveChange()
+          this.onEvent?.({ type: 'agents_exited', taskId: run.taskId, displayName: run.displayName })
+        }
+      } catch {
+        // driver not running, skip this tick
+      }
+    }, POLL_MS)
+    run.exitPoller = timer
   }
 
   private startPlanWatcher(run: ActiveRun): void {
@@ -542,9 +679,7 @@ export class SwarmController {
           `(swarm-plan read | swarm-plan done N | swarm-plan add "item")\n`
         for (const agent of run.agents) {
           try {
-            await this.driver.sendText(agent.sessionId, msg)
-            await delay(100)
-            await this.driver.sendText(agent.sessionId, '\r')
+            await this.sendMessage(agent.sessionId, msg)
           } catch { /* agent may have stopped */ }
         }
       }, 400)
@@ -595,34 +730,20 @@ export class SwarmController {
       return
     }
 
-    // Parse YAML frontmatter (--- ... ---\n) to extract `from:` field.
+    // Parse YAML frontmatter to extract `from:` field.
     let sender = 'unknown'
-    let body = raw
-    const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/)
+    const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)
     if (fmMatch) {
-      const fm = fmMatch[1]
-      body = fmMatch[2]
-      const fromLine = fm.split('\n').find((l) => l.startsWith('from:'))
+      const fromLine = fmMatch[1].split('\n').find((l) => l.startsWith('from:'))
       if (fromLine) sender = fromLine.replace('from:', '').trim()
     }
 
-    // Move to processed/ so the watcher doesn't re-fire.
-    const processedDir = join(inboxDir, 'processed')
+    // Send a single-line nudge so Claude Code receives it as one user message.
+    // Multi-line injections get split into separate submits in raw terminal mode.
+    // The file stays in inbox so the agent can read it via `swarm-msg read`.
+    const nudge = `[ultraswarm] new message from ${sender} — run: swarm-msg read`
     try {
-      await fs.rename(full, join(processedDir, filename))
-    } catch {
-      // processed/ should always exist; if rename fails, leave the file.
-    }
-
-    const msg =
-      `\n[inbox → ${agentName}] from: ${sender}\n` +
-      `${body.trimEnd()}\n` +
-      `(to reply: swarm-msg send ${sender} -m "...")\n`
-
-    try {
-      await this.driver.sendText(sessionId, msg)
-      await delay(120)
-      await this.driver.sendText(sessionId, '\r')
+      await this.sendMessage(sessionId, nudge)
     } catch (e) {
       console.error('[SwarmController] sendText inbox failed:', e)
     }

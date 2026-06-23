@@ -13,6 +13,8 @@ export type AgentProfile = ClientTemplate
 export interface SwarmAgent {
   name: string
   role: string
+  /** Optional per-agent client config name. Blank/absent → swarm-wide client chosen at launch. */
+  clientTemplate?: string
 }
 
 export interface SwarmConfig {
@@ -36,6 +38,7 @@ export interface Settings {
     autoStart: boolean
     fontSize: number
     preventSleep: boolean
+    keepAwakeWithLidClosed: boolean
   }
 }
 
@@ -62,6 +65,7 @@ export interface RunRecord {
   agents: Array<{
     name: string
     role: string
+    clientTemplate?: string
     claudeSessionId: string | null
     iterm2SessionId: string | null
   }>

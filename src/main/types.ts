@@ -40,7 +40,13 @@ export type AgentProfile = ClientTemplate
  */
 export const SwarmAgentSchema = z.object({
   name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'name must be alphanumeric/dash/underscore'),
-  role: z.string().default('')
+  role: z.string().default(''),
+  /**
+   * Optional per-agent client config override (a ClientTemplate name, e.g.
+   * 'codex'). Blank/absent → this agent uses the swarm-wide client chosen at
+   * launch. This is what lets one swarm mix different CLIs (codex + claude-code).
+   */
+  clientTemplate: z.string().optional()
 })
 export type SwarmAgent = z.infer<typeof SwarmAgentSchema>
 
@@ -86,9 +92,10 @@ export const SettingsSchema = z.object({
     .object({
       autoStart: z.boolean().default(false),
       fontSize: z.number().int().min(8).max(48).default(13),
-      preventSleep: z.boolean().default(false)
+      preventSleep: z.boolean().default(false),
+      keepAwakeWithLidClosed: z.boolean().default(false)
     })
-    .default({ autoStart: false, fontSize: 13, preventSleep: false })
+    .default({ autoStart: false, fontSize: 13, preventSleep: false, keepAwakeWithLidClosed: false })
 })
 export type Settings = z.infer<typeof SettingsSchema>
 
@@ -107,8 +114,9 @@ export interface RunSummary {
 /**
  * What the renderer sends when the user hits "New task" on the dashboard.
  * `templateName` references a saved SwarmTemplate (agents only); if null we
- * fall back to settings.swarm.agents. `clientTemplate` and `windowMode` are
- * always chosen at launch time and are independent of the template.
+ * fall back to settings.swarm.agents. `windowMode` is chosen at launch time.
+ * `clientTemplate` is the swarm-wide default client; individual agents may
+ * override it via their own SwarmAgent.clientTemplate (mixing CLIs in one swarm).
  */
 export const LaunchTaskRequestSchema = z.object({
   templateName: z.string().min(1).nullable(),
@@ -141,6 +149,8 @@ export type SwarmTemplate = z.infer<typeof SwarmTemplateSchema>
 export const RunAgentRecordSchema = z.object({
   name: z.string(),
   role: z.string().default(''),
+  /** The client config this agent ran. Absent on old records → fall back to the run's clientTemplate. */
+  clientTemplate: z.string().optional(),
   claudeSessionId: z.string().nullable().default(null),
   iterm2SessionId: z.string().nullable().default(null)
 })

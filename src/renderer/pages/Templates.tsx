@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { api, SwarmAgent, SwarmTemplate } from '../api'
+import { api, ClientTemplate, SwarmAgent, SwarmTemplate } from '../api'
 
 const NAME_RE = /^[a-zA-Z0-9_-]+$/
 
@@ -29,6 +29,7 @@ function validateAgents(agents: SwarmAgent[]): string | null {
 
 export function Templates(): JSX.Element {
   const [templates, setTemplates] = useState<SwarmTemplate[]>([])
+  const [profiles, setProfiles] = useState<ClientTemplate[]>([])
   const [selectedName, setSelectedName] = useState<string | null>(null)
   const [draft, setDraft] = useState<SwarmTemplate | null>(null)
   const [original, setOriginal] = useState<SwarmTemplate | null>(null)
@@ -37,8 +38,9 @@ export function Templates(): JSX.Element {
   const [busy, setBusy] = useState(false)
 
   async function refresh(keepName?: string): Promise<void> {
-    const list = await api().templates.list()
+    const [list, profs] = await Promise.all([api().templates.list(), api().profiles.list()])
     setTemplates(list)
+    setProfiles(profs)
     const name = keepName ?? selectedName ?? list[0]?.name ?? null
     if (name) selectTemplate(name, list)
     else {
@@ -242,22 +244,43 @@ export function Templates(): JSX.Element {
                 <button onClick={addAgent}>Add agent</button>
               </div>
               <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
-                Each agent gets its own name and role prompt. Names must be unique.
-                Leave a role blank to fall back to the config's{' '}
-                <span className="tag">initialPrompt</span>.
+                Each agent gets its own name, client config, and role prompt. Names must be
+                unique. Leave a role blank to fall back to the config's{' '}
+                <span className="tag">initialPrompt</span>. Set <strong>Client</strong> per
+                agent to mix CLIs in one swarm (e.g. codex + claude-code); leave it on{' '}
+                <span className="tag">(launch default)</span> to use whatever client config is
+                chosen on the dashboard.
               </div>
-              <div className="col" style={{ gap: 6 }}>
+              <div className="col" style={{ gap: 8 }}>
                 {draft.agents.map((a, i) => (
                   <div key={i} className="row" style={{ alignItems: 'flex-start', gap: 6 }}>
-                    <input
-                      type="text"
-                      style={{ width: 160 }}
-                      placeholder="agent-name"
-                      value={a.name}
-                      onChange={(e) => patchAgent(i, { name: e.target.value })}
-                    />
+                    <div className="col" style={{ gap: 4, width: 180 }}>
+                      <input
+                        type="text"
+                        placeholder="agent-name"
+                        value={a.name}
+                        onChange={(e) => patchAgent(i, { name: e.target.value })}
+                      />
+                      <select
+                        value={a.clientTemplate ?? ''}
+                        title="Which CLI this agent runs"
+                        onChange={(e) =>
+                          patchAgent(i, { clientTemplate: e.target.value || undefined })
+                        }
+                      >
+                        <option value="">(launch default)</option>
+                        {profiles.map((p) => (
+                          <option key={p.name} value={p.name}>
+                            {p.displayName} ({p.name})
+                          </option>
+                        ))}
+                        {a.clientTemplate && !profiles.some((p) => p.name === a.clientTemplate) && (
+                          <option value={a.clientTemplate}>{a.clientTemplate} (missing)</option>
+                        )}
+                      </select>
+                    </div>
                     <textarea
-                      rows={2}
+                      rows={3}
                       style={{ flex: 1 }}
                       placeholder="(use config prompt)"
                       value={a.role}
